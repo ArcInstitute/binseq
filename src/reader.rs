@@ -91,7 +91,7 @@ impl<'a> RefRecord<'a> {
     ///
     /// Returns an error if the decoding process fails
     pub fn decode_s(&self, dbuf: &mut Vec<u8>) -> Result<()> {
-        bitnuc::decode(self.sbuf(), self.config.slen, dbuf)?;
+        crate::nuc::decode(self.sbuf(), self.config.slen, dbuf)?;
         Ok(())
     }
 
@@ -108,7 +108,7 @@ impl<'a> RefRecord<'a> {
     ///
     /// Returns an error if the decoding process fails
     pub fn decode_x(&self, dbuf: &mut Vec<u8>) -> Result<()> {
-        bitnuc::decode(self.xbuf(), self.config.xlen, dbuf)?;
+        crate::nuc::decode(self.xbuf(), self.config.xlen, dbuf)?;
         Ok(())
     }
     /// Returns whether this record contains extended sequence data

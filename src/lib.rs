@@ -10,6 +10,7 @@
 //! - Parallel processing capabilities
 //! - Configurable policies for handling invalid nucleotides
 //! - Support for both single and paired-end sequences
+//! - SIMD acceleration for faster encoding/decoding (on supported CPUs)
 //!
 //! # Core Components
 //!
@@ -45,9 +46,11 @@
 
 pub mod error;
 mod header;
+pub mod nuc;
 mod parallel;
 mod policy;
 mod reader;
+mod simd;
 mod utils;
 pub mod writer;
 
@@ -56,6 +59,7 @@ pub use header::{BinseqHeader, SIZE_HEADER};
 pub use parallel::ParallelProcessor;
 pub use policy::{Policy, RNG_SEED};
 pub use reader::{MmapReader, RefRecord};
+pub use simd::is_simd_supported;
 pub use utils::expected_file_size;
 pub use writer::{BinseqWriter, BinseqWriterBuilder, Encoder};
 
