@@ -5,34 +5,6 @@ use bytemuck::{Pod, Zeroable, cast_slice};
 use paraseq::{Record, fastx};
 use zstd::stream::copy_encode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Pod, Zeroable)]
-#[repr(C)]
-struct Span {
-    offset: u64,
-    length: u64,
-}
-impl Span {
-    pub fn new(offset: usize, length: usize) -> Self {
-        Self {
-            offset: offset as u64,
-            length: length as u64,
-        }
-    }
-
-    pub fn from_extension<T: Clone>(buffer: &mut Vec<T>, addition: &[T]) -> Self {
-        let offset = buffer.len();
-        let length = addition.len();
-        buffer.extend_from_slice(addition);
-        Self::new(offset, length)
-    }
-
-    pub fn from_push<T: Clone>(buffer: &mut Vec<T>, item: T) -> Self {
-        let offset = buffer.len();
-        buffer.push(item);
-        Self::new(offset, 1)
-    }
-}
-
 #[derive(Clone)]
 struct ColumnarBlock<W: io::Write> {
     /// Internal writer for the block
@@ -44,11 +16,10 @@ struct ColumnarBlock<W: io::Write> {
     headers: Vec<u8>,
     qual: Vec<u8>,
 
-    /// Record spans for columns
-    seq_spans: Vec<Span>,
-    flag_spans: Vec<Span>,
-    header_spans: Vec<Span>,
-    qual_spans: Vec<Span>,
+    /// Length of sequences for each record
+    l_seq: Vec<u64>,
+    /// Length of headers for each record
+    l_headers: Vec<u64>,
 
     /// Reusable buffer for encoding sequences
     ebuf: Vec<u64>,
@@ -58,6 +29,8 @@ struct ColumnarBlock<W: io::Write> {
     z_flags: Vec<u8>,
     z_headers: Vec<u8>,
     z_qual: Vec<u8>,
+    z_seq_len: Vec<u8>,
+    z_header_len: Vec<u8>,
 
     /// Total nucleotides in this block
     nuclen: usize,
@@ -77,15 +50,15 @@ impl<W: io::Write> ColumnarBlock<W> {
             flags: Vec::default(),
             headers: Vec::default(),
             qual: Vec::default(),
-            flag_spans: Vec::default(),
-            seq_spans: Vec::default(),
-            header_spans: Vec::default(),
-            qual_spans: Vec::default(),
+            l_seq: Vec::default(),
+            l_headers: Vec::default(),
             ebuf: Vec::default(),
             z_seq: Vec::default(),
             z_flags: Vec::default(),
             z_headers: Vec::default(),
             z_qual: Vec::default(),
+            z_seq_len: Vec::default(),
+            z_header_len: Vec::default(),
         }
     }
 
@@ -95,10 +68,8 @@ impl<W: io::Write> ColumnarBlock<W> {
 
         // clear spans
         {
-            self.seq_spans.clear();
-            self.flag_spans.clear();
-            self.header_spans.clear();
-            self.qual_spans.clear();
+            self.l_seq.clear();
+            self.l_headers.clear();
         }
 
         // clear vectors
@@ -116,15 +87,17 @@ impl<W: io::Write> ColumnarBlock<W> {
             self.z_flags.clear();
             self.z_headers.clear();
             self.z_qual.clear();
+            self.z_seq_len.clear();
+            self.z_header_len.clear();
         }
     }
 
     fn add_sequence(&mut self, record: &SequencingRecord) {
-        self.seq_spans
-            .push(Span::from_extension(&mut self.seq, record.s_seq));
+        self.l_seq.push(record.s_seq.len() as u64);
+        self.seq.extend_from_slice(&record.s_seq);
         if let Some(x_seq) = record.x_seq {
-            self.seq_spans
-                .push(Span::from_extension(&mut self.seq, x_seq));
+            self.l_seq.push(x_seq.len() as u64);
+            self.seq.extend_from_slice(x_seq);
         }
 
         // keep the sequence size up to date
@@ -132,30 +105,27 @@ impl<W: io::Write> ColumnarBlock<W> {
     }
 
     fn add_flag(&mut self, record: &SequencingRecord) {
-        if let Some(flag) = record.flag {
-            self.flag_spans.push(Span::from_push(&mut self.flags, flag));
-        }
+        record.flag.map(|flag| self.flags.push(flag));
     }
 
     fn add_headers(&mut self, record: &SequencingRecord) {
         if let Some(header) = record.s_header {
-            self.header_spans
-                .push(Span::from_extension(&mut self.headers, header));
+            self.l_headers.push(header.len() as u64);
+            self.headers.extend_from_slice(header);
         }
         if let Some(header) = record.x_header {
-            self.header_spans
-                .push(Span::from_extension(&mut self.headers, header));
+            self.l_headers.push(header.len() as u64);
+            self.headers.extend_from_slice(header);
         }
     }
 
+    /// Note: this does not check if quality scores are different lengths from sequence
     fn add_quality(&mut self, record: &SequencingRecord) {
         if let Some(qual) = record.s_qual {
-            self.qual_spans
-                .push(Span::from_extension(&mut self.qual, qual));
+            self.qual.extend_from_slice(qual);
         }
         if let Some(qual) = record.x_qual {
-            self.qual_spans
-                .push(Span::from_extension(&mut self.qual, qual));
+            self.qual.extend_from_slice(qual);
         }
     }
 
@@ -163,7 +133,6 @@ impl<W: io::Write> ColumnarBlock<W> {
         if self.current_size + record.size() > self.block_size {
             self.flush()?;
         }
-
         self.add_sequence(&record);
         self.add_flag(&record);
         self.add_headers(&record);
@@ -179,6 +148,13 @@ impl<W: io::Write> ColumnarBlock<W> {
     }
 
     fn compress_columns(&mut self) -> Result<()> {
+        // compress sequence lengths
+        copy_encode(cast_slice(&self.l_seq), &mut self.z_seq_len, 3)?;
+
+        if self.headers.len() > 0 {
+            copy_encode(cast_slice(&self.l_headers), &mut self.z_header_len, 3)?;
+        }
+
         // compress sequence
         copy_encode(cast_slice(&self.ebuf), &mut self.z_seq, 3)?;
 
@@ -201,32 +177,18 @@ impl<W: io::Write> ColumnarBlock<W> {
     }
 
     fn write_to_inner(&mut self) -> Result<()> {
-        // write all spans
-        {
-            self.inner
-                .write_all(bytemuck::cast_slice(&self.seq_spans))?;
-            self.inner
-                .write_all(bytemuck::cast_slice(&self.flag_spans))?;
-            self.inner
-                .write_all(bytemuck::cast_slice(&self.header_spans))?;
-            self.inner
-                .write_all(bytemuck::cast_slice(&self.qual_spans))?;
-        }
-
         // write all compressed buffers
-        {
-            self.inner.write_all(&self.z_seq)?;
-            self.inner.write_all(&self.z_flags)?;
-            self.inner.write_all(&self.z_headers)?;
-            self.inner.write_all(&self.z_qual)?;
-        }
+        self.inner.write_all(&self.z_seq_len)?;
+        self.inner.write_all(&self.z_header_len)?;
+        self.inner.write_all(&self.z_seq)?;
+        self.inner.write_all(&self.z_flags)?;
+        self.inner.write_all(&self.z_headers)?;
+        self.inner.write_all(&self.z_qual)?;
 
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        eprintln!("Flushing block!");
-
         // encode all sequences at once
         self.encode_sequence()?;
 
@@ -235,6 +197,8 @@ impl<W: io::Write> ColumnarBlock<W> {
 
         // build the block header
         let header = BlockHeader::from_writer_state(&self);
+
+        eprintln!("{header:?}");
 
         // write the block header
         header.write(&mut self.inner)?;
@@ -256,17 +220,13 @@ struct BlockHeader {
     version: u8,
     padding: [u8; 4],
 
-    // length of spans
-    len_span_seq: u32,
-    len_span_flags: u32,
-    len_span_headers: u32,
-    len_span_qual: u32,
-
     // length of compressed columns
-    len_z_seq: u32,
-    len_z_flags: u32,
-    len_z_headers: u32,
-    len_z_qual: u32,
+    len_z_seq_len: u64,
+    len_z_header_len: u64,
+    len_z_seq: u64,
+    len_z_flags: u64,
+    len_z_headers: u64,
+    len_z_qual: u64,
 
     // full decoded length of the sequence block
     nuclen: u64,
@@ -277,14 +237,12 @@ impl BlockHeader {
             magic: *b"CBQ",
             version: 1,
             padding: [42; 4],
-            len_span_seq: writer.seq_spans.len() as u32,
-            len_span_flags: writer.flag_spans.len() as u32,
-            len_span_headers: writer.header_spans.len() as u32,
-            len_span_qual: writer.qual_spans.len() as u32,
-            len_z_seq: writer.z_seq.len() as u32,
-            len_z_flags: writer.z_flags.len() as u32,
-            len_z_headers: writer.z_headers.len() as u32,
-            len_z_qual: writer.z_qual.len() as u32,
+            len_z_seq_len: writer.z_seq_len.len() as u64,
+            len_z_header_len: writer.z_header_len.len() as u64,
+            len_z_seq: writer.z_seq.len() as u64,
+            len_z_flags: writer.z_flags.len() as u64,
+            len_z_headers: writer.z_headers.len() as u64,
+            len_z_qual: writer.z_qual.len() as u64,
             nuclen: writer.nuclen as u64,
         }
     }
