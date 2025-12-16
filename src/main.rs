@@ -25,12 +25,12 @@ struct ColumnarBlock<W: io::Write> {
     ebuf: Vec<u64>,
 
     /// Reusable zstd compression buffer for columnar data
+    z_seq_len: Vec<u8>,
+    z_header_len: Vec<u8>,
     z_seq: Vec<u8>,
     z_flags: Vec<u8>,
     z_headers: Vec<u8>,
     z_qual: Vec<u8>,
-    z_seq_len: Vec<u8>,
-    z_header_len: Vec<u8>,
 
     /// Total nucleotides in this block
     nuclen: usize,
@@ -46,13 +46,21 @@ impl<W: io::Write> ColumnarBlock<W> {
             block_size,
             current_size: 0,
             nuclen: 0,
+
+            // data buffers
             seq: Vec::default(),
             flags: Vec::default(),
             headers: Vec::default(),
             qual: Vec::default(),
+
+            // span buffer
             l_seq: Vec::default(),
             l_headers: Vec::default(),
+
+            // encoding buffer
             ebuf: Vec::default(),
+
+            // compression buffers
             z_seq: Vec::default(),
             z_flags: Vec::default(),
             z_headers: Vec::default(),
@@ -149,28 +157,28 @@ impl<W: io::Write> ColumnarBlock<W> {
 
     fn compress_columns(&mut self) -> Result<()> {
         // compress sequence lengths
-        copy_encode(cast_slice(&self.l_seq), &mut self.z_seq_len, 3)?;
+        copy_encode(cast_slice(&self.l_seq), &mut self.z_seq_len, 0)?;
 
         if self.headers.len() > 0 {
-            copy_encode(cast_slice(&self.l_headers), &mut self.z_header_len, 3)?;
+            copy_encode(cast_slice(&self.l_headers), &mut self.z_header_len, 0)?;
         }
 
         // compress sequence
-        copy_encode(cast_slice(&self.ebuf), &mut self.z_seq, 3)?;
+        copy_encode(cast_slice(&self.ebuf), &mut self.z_seq, 0)?;
 
         // compress flags
         if self.flags.len() > 0 {
-            copy_encode(cast_slice(&self.flags), &mut self.z_flags, 3)?;
+            copy_encode(cast_slice(&self.flags), &mut self.z_flags, 0)?;
         }
 
         // compress headers
         if self.headers.len() > 0 {
-            copy_encode(cast_slice(&self.headers), &mut self.z_headers, 3)?;
+            copy_encode(cast_slice(&self.headers), &mut self.z_headers, 0)?;
         }
 
         // compress quality
         if self.qual.len() > 0 {
-            copy_encode(cast_slice(&self.qual), &mut self.z_qual, 3)?;
+            copy_encode(cast_slice(&self.qual), &mut self.z_qual, 0)?;
         }
 
         Ok(())
@@ -197,7 +205,6 @@ impl<W: io::Write> ColumnarBlock<W> {
 
         // build the block header
         let header = BlockHeader::from_writer_state(&self);
-
         eprintln!("{header:?}");
 
         // write the block header
@@ -311,7 +318,15 @@ fn main() -> Result<()> {
         for res in rset.iter() {
             let record = res?;
             let seq = record.seq();
-            let ref_record = SequencingRecord::new(&seq, None, None, None, None, None, None);
+            let ref_record = SequencingRecord::new(
+                &seq,
+                record.qual(),
+                Some(record.id()),
+                None,
+                None,
+                None,
+                None,
+            );
             writer.push(ref_record)?;
         }
     }
