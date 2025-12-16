@@ -1,36 +1,35 @@
-use std::{io, sync::Arc};
+use std::{fs, io};
 
 use anyhow::Result;
-use bytemuck::cast_slice;
-use paraseq::fastx;
-use parking_lot::Mutex;
+use bytemuck::{Pod, Zeroable, cast_slice};
+use paraseq::{Record, fastx};
 use zstd::stream::copy_encode;
 
-struct Encoder<W: io::Write> {
-    writer: Arc<Mutex<W>>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Pod, Zeroable)]
+#[repr(C)]
 struct Span {
-    offset: usize,
-    length: usize,
+    offset: u64,
+    length: u64,
 }
 impl Span {
     pub fn new(offset: usize, length: usize) -> Self {
-        Self { offset, length }
+        Self {
+            offset: offset as u64,
+            length: length as u64,
+        }
     }
 
     pub fn from_extension<T: Clone>(buffer: &mut Vec<T>, addition: &[T]) -> Self {
         let offset = buffer.len();
         let length = addition.len();
         buffer.extend_from_slice(addition);
-        Self { offset, length }
+        Self::new(offset, length)
     }
 
     pub fn from_push<T: Clone>(buffer: &mut Vec<T>, item: T) -> Self {
         let offset = buffer.len();
         buffer.push(item);
-        Self { offset, length: 1 }
+        Self::new(offset, 1)
     }
 }
 
@@ -60,9 +59,11 @@ struct ColumnarBlock<W: io::Write> {
     z_headers: Vec<u8>,
     z_qual: Vec<u8>,
 
-    /// Maximum size of this block (virtual)
-    seq_size: usize,
+    /// Total nucleotides in this block
+    nuclen: usize,
+    /// Current size of this block (virtual)
     current_size: usize,
+    /// Maximum size of this block (virtual)
     block_size: usize,
 }
 impl<W: io::Write> ColumnarBlock<W> {
@@ -71,7 +72,7 @@ impl<W: io::Write> ColumnarBlock<W> {
             inner,
             block_size,
             current_size: 0,
-            seq_size: 0,
+            nuclen: 0,
             seq: Vec::default(),
             flags: Vec::default(),
             headers: Vec::default(),
@@ -88,6 +89,36 @@ impl<W: io::Write> ColumnarBlock<W> {
         }
     }
 
+    fn clear(&mut self) {
+        self.nuclen = 0;
+        self.current_size = 0;
+
+        // clear spans
+        {
+            self.seq_spans.clear();
+            self.flag_spans.clear();
+            self.header_spans.clear();
+            self.qual_spans.clear();
+        }
+
+        // clear vectors
+        {
+            self.seq.clear();
+            self.flags.clear();
+            self.headers.clear();
+            self.qual.clear();
+        }
+
+        // clear encodings
+        {
+            self.ebuf.clear();
+            self.z_seq.clear();
+            self.z_flags.clear();
+            self.z_headers.clear();
+            self.z_qual.clear();
+        }
+    }
+
     fn add_sequence(&mut self, record: &SequencingRecord) {
         self.seq_spans
             .push(Span::from_extension(&mut self.seq, record.s_seq));
@@ -97,7 +128,7 @@ impl<W: io::Write> ColumnarBlock<W> {
         }
 
         // keep the sequence size up to date
-        self.seq_size = self.seq.len();
+        self.nuclen = self.seq.len();
     }
 
     fn add_flag(&mut self, record: &SequencingRecord) {
@@ -128,15 +159,16 @@ impl<W: io::Write> ColumnarBlock<W> {
         }
     }
 
-    pub fn push(&mut self, record: &SequencingRecord) -> Result<()> {
+    pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
         if self.current_size + record.size() > self.block_size {
             self.flush()?;
         }
 
-        self.add_sequence(record);
-        self.add_flag(record);
-        self.add_headers(record);
-        self.add_quality(record);
+        self.add_sequence(&record);
+        self.add_flag(&record);
+        self.add_headers(&record);
+        self.add_quality(&record);
+        self.current_size += record.size();
 
         Ok(())
     }
@@ -168,14 +200,101 @@ impl<W: io::Write> ColumnarBlock<W> {
         Ok(())
     }
 
+    fn write_to_inner(&mut self) -> Result<()> {
+        // write all spans
+        {
+            self.inner
+                .write_all(bytemuck::cast_slice(&self.seq_spans))?;
+            self.inner
+                .write_all(bytemuck::cast_slice(&self.flag_spans))?;
+            self.inner
+                .write_all(bytemuck::cast_slice(&self.header_spans))?;
+            self.inner
+                .write_all(bytemuck::cast_slice(&self.qual_spans))?;
+        }
+
+        // write all compressed buffers
+        {
+            self.inner.write_all(&self.z_seq)?;
+            self.inner.write_all(&self.z_flags)?;
+            self.inner.write_all(&self.z_headers)?;
+            self.inner.write_all(&self.z_qual)?;
+        }
+
+        Ok(())
+    }
+
     pub fn flush(&mut self) -> Result<()> {
+        eprintln!("Flushing block!");
+
         // encode all sequences at once
         self.encode_sequence()?;
 
         // compress each column
         self.compress_columns()?;
 
+        // build the block header
+        let header = BlockHeader::from_writer_state(&self);
+
+        // write the block header
+        header.write(&mut self.inner)?;
+
+        // write the internal state to the inner writer
+        self.write_to_inner()?;
+
+        // clear the internal state
+        self.clear();
+
         Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq, Eq, Hash)]
+#[repr(C)]
+struct BlockHeader {
+    magic: [u8; 3],
+    version: u8,
+    padding: [u8; 4],
+
+    // length of spans
+    len_span_seq: u32,
+    len_span_flags: u32,
+    len_span_headers: u32,
+    len_span_qual: u32,
+
+    // length of compressed columns
+    len_z_seq: u32,
+    len_z_flags: u32,
+    len_z_headers: u32,
+    len_z_qual: u32,
+
+    // full decoded length of the sequence block
+    nuclen: u64,
+}
+impl BlockHeader {
+    pub fn from_writer_state<W: io::Write>(writer: &ColumnarBlock<W>) -> Self {
+        Self {
+            magic: *b"CBQ",
+            version: 1,
+            padding: [42; 4],
+            len_span_seq: writer.seq_spans.len() as u32,
+            len_span_flags: writer.flag_spans.len() as u32,
+            len_span_headers: writer.header_spans.len() as u32,
+            len_span_qual: writer.qual_spans.len() as u32,
+            len_z_seq: writer.z_seq.len() as u32,
+            len_z_flags: writer.z_flags.len() as u32,
+            len_z_headers: writer.z_headers.len() as u32,
+            len_z_qual: writer.z_qual.len() as u32,
+            nuclen: writer.nuclen as u64,
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+
+    pub fn write<W: io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
+        writer.write_all(self.as_bytes())
     }
 }
 
@@ -223,7 +342,21 @@ impl<'a> SequencingRecord<'a> {
 }
 
 fn main() -> Result<()> {
-    let path = "./data/some.fq";
-    let reader = fastx::Reader::from_path(path)?;
+    let path = "./data/some.fq.gz";
+    let opath = "./data/some.cbq";
+    let handle = io::BufWriter::new(fs::File::create(opath)?);
+    let mut writer = ColumnarBlock::new(handle, 1024 * 1024);
+
+    let mut reader = fastx::Reader::from_path(path)?;
+    let mut rset = reader.new_record_set();
+    while rset.fill(&mut reader)? {
+        for res in rset.iter() {
+            let record = res?;
+            let seq = record.seq();
+            let ref_record = SequencingRecord::new(&seq, None, None, None, None, None, None);
+            writer.push(ref_record)?;
+        }
+    }
+    writer.flush()?;
     Ok(())
 }
