@@ -1,0 +1,13 @@
+[package]
+name = "cbq"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+bitnuc = "0.3.2"
+bytemuck = "1.24.0"
+clap = { version = "4.5.53", features = ["derive"] }
+paraseq = "0.4.7"
+parking_lot = "0.12.5"
+zstd = "0.13.3"
