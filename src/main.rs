@@ -465,9 +465,82 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    pub fn fill_from_bytes(&mut self, bytes: &[u8], header: BlockHeader) -> Result<()> {
-        let mut reader = io::Cursor::new(bytes);
-        self.read_from(&mut reader, header)
+    pub fn decompress_from_bytes(&mut self, bytes: &[u8], header: BlockHeader) -> Result<()> {
+        // clears the internal state
+        self.clear();
+
+        // reload the internal state from the header
+        self.nuclen = header.nuclen as usize;
+        self.num_records = header.num_records as usize;
+        self.num_npos = header.num_npos as usize;
+
+        let mut byte_offset = 0;
+
+        // decompress sequence lengths
+        {
+            self.l_seq.resize(self.num_records, 0);
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_seq_len, bytes),
+                cast_slice_mut(&mut self.l_seq),
+            )?;
+        }
+
+        // decompress header lengths
+        if header.len_z_header_len > 0 {
+            self.l_headers.resize(self.num_records, 0);
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_header_len, bytes),
+                cast_slice_mut(&mut self.l_headers),
+            )?;
+        }
+
+        // decompress npos
+        if header.len_z_npos > 0 {
+            self.npos.resize(self.num_npos, 0);
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_npos, bytes),
+                cast_slice_mut(&mut self.npos),
+            )?;
+        }
+
+        // decompress sequence
+        {
+            self.ebuf.resize(self.ebuf_len(), 0);
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_seq, bytes),
+                cast_slice_mut(&mut self.ebuf),
+            )?;
+
+            bitnuc::twobit::decode(&self.ebuf, self.nuclen, &mut self.seq)?;
+            self.backfill_npos();
+        }
+
+        // decompress flags
+        if header.len_z_flags > 0 {
+            self.flags.resize(self.num_records, 0);
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_flags, bytes),
+                cast_slice_mut(&mut self.flags),
+            )?;
+        }
+
+        // decompress headers
+        if header.len_z_headers > 0 {
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_headers, bytes),
+                &mut self.headers,
+            )?;
+        }
+
+        // decompress quality scores
+        if header.len_z_qual > 0 {
+            copy_decode(
+                slice_and_increment(&mut byte_offset, header.len_z_qual, bytes),
+                &mut self.qual,
+            )?;
+        }
+
+        Ok(())
     }
 
     pub fn iter_records(&self, range: BlockRange) -> RefRecordIter<'_> {
@@ -485,6 +558,12 @@ fn extension_read<R: io::Read>(reader: &mut R, dst: &mut Vec<u8>, size: usize) -
     dst.resize(size, 0);
     reader.read_exact(dst)?;
     Ok(())
+}
+
+fn slice_and_increment<'a>(offset: &mut usize, len: u64, bytes: &'a [u8]) -> &'a [u8] {
+    let slice = &bytes[*offset..*offset + len as usize];
+    *offset += len as usize;
+    slice
 }
 
 fn calculate_offsets(values: &[u64]) -> Vec<u64> {
@@ -1208,8 +1287,8 @@ impl MmapReader {
 
         let data_end = header_end + block_header.block_len();
         let block_data_slice = &self.inner[header_end..data_end];
-        self.block.fill_from_bytes(block_data_slice, block_header)?;
-        self.block.decompress_columns()?;
+        self.block
+            .decompress_from_bytes(&block_data_slice, block_header)?;
         Ok(())
     }
 }
