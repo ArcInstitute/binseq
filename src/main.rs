@@ -294,6 +294,10 @@ impl BlockHeader {
         bytemuck::bytes_of(self)
     }
 
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        *bytemuck::from_bytes(bytes)
+    }
+
     pub fn write<W: io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
         writer.write_all(self.as_bytes())
     }
@@ -342,9 +346,40 @@ impl<'a> SequencingRecord<'a> {
     }
 }
 
+pub struct Reader<R: io::Read> {
+    inner: R,
+}
+impl<R: io::Read> Reader<R> {
+    pub fn new(inner: R) -> Self {
+        Self { inner }
+    }
+
+    pub fn read_block(&mut self) -> Result<bool> {
+        let mut header_buf = [0u8; size_of::<BlockHeader>()];
+
+        // Read the block header from the reader
+        match self.inner.read_exact(&mut header_buf) {
+            Ok(_) => {}
+            Err(e) => {
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    return Ok(false);
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+        let header = BlockHeader::from_bytes(&header_buf);
+
+        eprintln!("{:?}", header);
+
+        Ok(true)
+    }
+}
+
 fn main() -> Result<()> {
     let path = "./data/some.fq.gz";
     let opath = "./data/some.cbq";
+
     let handle = io::BufWriter::new(fs::File::create(opath)?);
     let mut writer = ColumnarBlock::new(handle, 1024 * 1024);
 
@@ -367,5 +402,6 @@ fn main() -> Result<()> {
         }
     }
     writer.flush()?;
+
     Ok(())
 }
