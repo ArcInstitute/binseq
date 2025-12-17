@@ -6,7 +6,10 @@ use bytemuck::{Pod, Zeroable, cast_slice, checked::cast_slice_mut};
 use memmap2::Mmap;
 use paraseq::{Record, fastx};
 use parking_lot::Mutex;
-use zstd::stream::{copy_decode, copy_encode};
+use zstd::{
+    stream::{copy_decode, copy_encode},
+    zstd_safe,
+};
 
 pub const FILE_MAGIC: &[u8; 7] = b"CBQFILE";
 pub const BLOCK_MAGIC: &[u8; 3] = b"BLK";
@@ -477,7 +480,12 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    pub fn decompress_from_bytes(&mut self, bytes: &[u8], header: BlockHeader) -> Result<()> {
+    pub fn decompress_from_bytes(
+        &mut self,
+        bytes: &[u8],
+        header: BlockHeader,
+        dctx: &mut zstd_safe::DCtx,
+    ) -> Result<()> {
         // clears the internal state
         self.clear();
 
@@ -491,37 +499,47 @@ impl ColumnarBlock {
         // decompress sequence lengths
         {
             self.l_seq.resize(self.num_records, 0);
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_seq_len, bytes),
+            dctx.decompress(
                 cast_slice_mut(&mut self.l_seq),
-            )?;
+                slice_and_increment(&mut byte_offset, header.len_z_seq_len, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
         }
 
         // decompress header lengths
         if header.len_z_header_len > 0 {
             self.l_headers.resize(self.num_records, 0);
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_header_len, bytes),
+            dctx.decompress(
                 cast_slice_mut(&mut self.l_headers),
-            )?;
+                slice_and_increment(&mut byte_offset, header.len_z_header_len, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+        }
+
+        // calculate offsets
+        {
+            calculate_offsets(&self.l_seq, &mut self.l_seq_offsets);
+            calculate_offsets(&self.l_headers, &mut self.l_header_offsets);
         }
 
         // decompress npos
         if header.len_z_npos > 0 {
             self.npos.resize(self.num_npos, 0);
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_npos, bytes),
+            dctx.decompress(
                 cast_slice_mut(&mut self.npos),
-            )?;
+                slice_and_increment(&mut byte_offset, header.len_z_npos, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
         }
 
         // decompress sequence
         {
             self.ebuf.resize(self.ebuf_len(), 0);
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_seq, bytes),
+            dctx.decompress(
                 cast_slice_mut(&mut self.ebuf),
-            )?;
+                slice_and_increment(&mut byte_offset, header.len_z_seq, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
 
             bitnuc::twobit::decode(&self.ebuf, self.nuclen, &mut self.seq)?;
             self.backfill_npos();
@@ -530,32 +548,35 @@ impl ColumnarBlock {
         // decompress flags
         if header.len_z_flags > 0 {
             self.flags.resize(self.num_records, 0);
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_flags, bytes),
+            dctx.decompress(
                 cast_slice_mut(&mut self.flags),
-            )?;
+                slice_and_increment(&mut byte_offset, header.len_z_flags, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
         }
 
         // decompress headers
         if header.len_z_headers > 0 {
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_headers, bytes),
+            self.headers.resize(
+                (self.l_header_offsets.last().copied().unwrap_or(0)
+                    + self.l_headers.last().copied().unwrap_or(0)) as usize,
+                0,
+            );
+            dctx.decompress(
                 &mut self.headers,
-            )?;
+                slice_and_increment(&mut byte_offset, header.len_z_headers, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
         }
 
         // decompress quality scores
         if header.len_z_qual > 0 {
-            copy_decode(
-                slice_and_increment(&mut byte_offset, header.len_z_qual, bytes),
+            self.qual.resize(self.nuclen, 0);
+            dctx.decompress(
                 &mut self.qual,
-            )?;
-        }
-
-        // calculate offsets
-        {
-            calculate_offsets(&self.l_seq, &mut self.l_seq_offsets);
-            calculate_offsets(&self.l_headers, &mut self.l_header_offsets);
+                slice_and_increment(&mut byte_offset, header.len_z_qual, bytes),
+            )
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
         }
 
         Ok(())
@@ -1243,13 +1264,25 @@ impl<R: io::Read> Reader<R> {
     }
 }
 
-#[derive(Clone)]
 pub struct MmapReader {
     inner: Arc<Mmap>,
     index: Arc<Index>,
 
     /// Reusable record block
     block: ColumnarBlock,
+
+    /// Reusable decompression context
+    dctx: zstd_safe::DCtx<'static>,
+}
+impl Clone for MmapReader {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            index: self.index.clone(),
+            block: self.block.clone(),
+            dctx: zstd_safe::DCtx::create(),
+        }
+    }
 }
 impl MmapReader {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -1283,6 +1316,7 @@ impl MmapReader {
             inner: Arc::new(inner),
             index: Arc::new(index),
             block: ColumnarBlock::new(header),
+            dctx: zstd_safe::DCtx::create(),
         })
     }
 
@@ -1302,7 +1336,7 @@ impl MmapReader {
         let data_end = header_end + block_header.block_len();
         let block_data_slice = &self.inner[header_end..data_end];
         self.block
-            .decompress_from_bytes(&block_data_slice, block_header)?;
+            .decompress_from_bytes(&block_data_slice, block_header, &mut self.dctx)?;
         Ok(())
     }
 }
