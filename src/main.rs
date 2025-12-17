@@ -126,7 +126,7 @@ pub struct ColumnarBlock {
     /// Reusable buffer for encoding sequences
     ebuf: Vec<u64>,
 
-    /// Reusable zstd compression buffer for columnar data
+    // Reusable zstd compression buffer for columnar data
     z_seq_len: Vec<u8>,
     z_header_len: Vec<u8>,
     z_npos: Vec<u8>,
@@ -134,6 +134,10 @@ pub struct ColumnarBlock {
     z_flags: Vec<u8>,
     z_headers: Vec<u8>,
     z_qual: Vec<u8>,
+
+    // reusable offset buffers
+    l_seq_offsets: Vec<u64>,
+    l_header_offsets: Vec<u64>,
 
     /// Number of records in the block
     num_records: usize,
@@ -176,6 +180,8 @@ impl ColumnarBlock {
         {
             self.l_seq.clear();
             self.l_headers.clear();
+            self.l_seq_offsets.clear();
+            self.l_header_offsets.clear();
         }
 
         // clear vectors
@@ -398,6 +404,12 @@ impl ColumnarBlock {
             copy_decode(self.z_qual.as_slice(), &mut self.qual)?;
         }
 
+        // calculate offsets
+        {
+            calculate_offsets(&self.l_seq, &mut self.l_seq_offsets);
+            calculate_offsets(&self.l_headers, &mut self.l_header_offsets);
+        }
+
         Ok(())
     }
 
@@ -540,6 +552,12 @@ impl ColumnarBlock {
             )?;
         }
 
+        // calculate offsets
+        {
+            calculate_offsets(&self.l_seq, &mut self.l_seq_offsets);
+            calculate_offsets(&self.l_headers, &mut self.l_header_offsets);
+        }
+
         Ok(())
     }
 
@@ -548,8 +566,6 @@ impl ColumnarBlock {
             block: self,
             range,
             index: 0,
-            l_seq_offsets: calculate_offsets(&self.l_seq),
-            l_header_offsets: calculate_offsets(&self.l_headers),
         }
     }
 }
@@ -566,12 +582,12 @@ fn slice_and_increment<'a>(offset: &mut usize, len: u64, bytes: &'a [u8]) -> &'a
     slice
 }
 
-fn calculate_offsets(values: &[u64]) -> Vec<u64> {
-    let mut offsets = vec![0; values.len()];
+fn calculate_offsets(values: &[u64], offsets: &mut Vec<u64>) {
+    offsets.clear();
+    offsets.push(0);
     for i in 1..values.len() {
-        offsets[i] = offsets[i - 1] + values[i - 1];
+        offsets.push(offsets[i - 1] + values[i - 1]);
     }
-    offsets
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -604,10 +620,6 @@ pub struct RefRecordIter<'a> {
     block: &'a ColumnarBlock,
     range: BlockRange,
     index: usize,
-
-    // precomputed offsets
-    l_seq_offsets: Vec<u64>,
-    l_header_offsets: Vec<u64>,
 }
 impl<'a> Iterator for RefRecordIter<'a> {
     type Item = RefRecord<'a>;
@@ -616,11 +628,13 @@ impl<'a> Iterator for RefRecordIter<'a> {
         if self.index >= self.block.num_records {
             None
         } else {
-            let sseq_span =
-                Span::new_u64(self.l_seq_offsets[self.index], self.block.l_seq[self.index]);
+            let sseq_span = Span::new_u64(
+                self.block.l_seq_offsets[self.index],
+                self.block.l_seq[self.index],
+            );
             let sheader_span = if self.block.header.has_headers() {
                 Some(Span::new_u64(
-                    self.l_header_offsets[self.index],
+                    self.block.l_header_offsets[self.index],
                     self.block.l_headers[self.index],
                 ))
             } else {
@@ -628,7 +642,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
             };
             let xseq_span = if self.block.header.is_paired() {
                 Some(Span::new_u64(
-                    self.l_seq_offsets[self.index + 1],
+                    self.block.l_seq_offsets[self.index + 1],
                     self.block.l_seq[self.index + 1],
                 ))
             } else {
@@ -636,7 +650,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
             };
             let xheader_span = if self.block.header.is_paired() && self.block.header.has_headers() {
                 Some(Span::new_u64(
-                    self.l_header_offsets[self.index + 1],
+                    self.block.l_header_offsets[self.index + 1],
                     self.block.l_headers[self.index + 1],
                 ))
             } else {
