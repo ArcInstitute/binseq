@@ -1,15 +1,12 @@
 use std::{fs, io};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable, cast_slice};
 use paraseq::{Record, fastx};
 use zstd::stream::copy_encode;
 
-#[derive(Clone)]
-struct ColumnarBlockWriter<W: io::Write> {
-    /// Internal writer for the block
-    inner: W,
-
+#[derive(Clone, Default)]
+struct ColumnarBlock {
     /// Separate columns for each data type
     seq: Vec<u8>,
     flags: Vec<u64>,
@@ -42,41 +39,16 @@ struct ColumnarBlockWriter<W: io::Write> {
     /// Maximum size of this block (virtual)
     block_size: usize,
 }
-impl<W: io::Write> ColumnarBlockWriter<W> {
-    pub fn new(inner: W, block_size: usize) -> Self {
+impl ColumnarBlock {
+    /// Create a new columnar block with the given block size
+    pub fn new(block_size: usize) -> Self {
         Self {
-            inner,
             block_size,
-            current_size: 0,
-            nuclen: 0,
-
-            // data buffers
-            seq: Vec::default(),
-            flags: Vec::default(),
-            headers: Vec::default(),
-            qual: Vec::default(),
-
-            // span buffer
-            l_seq: Vec::default(),
-            l_headers: Vec::default(),
-
-            // Position of all N's in the sequence
-            npos: Vec::default(),
-
-            // encoding buffer
-            ebuf: Vec::default(),
-
-            // compression buffers
-            z_seq_len: Vec::default(),
-            z_header_len: Vec::default(),
-            z_npos: Vec::default(),
-            z_seq: Vec::default(),
-            z_flags: Vec::default(),
-            z_headers: Vec::default(),
-            z_qual: Vec::default(),
+            ..Default::default()
         }
     }
 
+    /// Clears the internal data structures
     fn clear(&mut self) {
         self.nuclen = 0;
         self.current_size = 0;
@@ -146,10 +118,15 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         }
     }
 
+    fn can_fit(&self, record: &SequencingRecord<'_>) -> bool {
+        self.current_size + record.size() <= self.block_size
+    }
+
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
-        if self.current_size + record.size() > self.block_size {
-            self.flush()?;
+        if !self.can_fit(&record) {
+            bail!("Block is full")
         }
+
         self.add_sequence(&record);
         self.add_flag(&record);
         self.add_headers(&record);
@@ -203,18 +180,18 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         Ok(())
     }
 
-    fn write_to_inner(&mut self) -> Result<()> {
-        self.inner.write_all(&self.z_seq_len)?;
-        self.inner.write_all(&self.z_header_len)?;
-        self.inner.write_all(&self.z_npos)?;
-        self.inner.write_all(&self.z_seq)?;
-        self.inner.write_all(&self.z_flags)?;
-        self.inner.write_all(&self.z_headers)?;
-        self.inner.write_all(&self.z_qual)?;
+    fn write<W: io::Write>(&mut self, writer: &mut W) -> Result<()> {
+        writer.write_all(&self.z_seq_len)?;
+        writer.write_all(&self.z_header_len)?;
+        writer.write_all(&self.z_npos)?;
+        writer.write_all(&self.z_seq)?;
+        writer.write_all(&self.z_flags)?;
+        writer.write_all(&self.z_headers)?;
+        writer.write_all(&self.z_qual)?;
         Ok(())
     }
 
-    pub fn flush(&mut self) -> Result<()> {
+    pub fn flush_to<W: io::Write>(&mut self, writer: &mut W) -> Result<()> {
         // encode all sequences at once
         self.encode_sequence()?;
 
@@ -225,18 +202,48 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         self.compress_columns()?;
 
         // build the block header
-        let header = BlockHeader::from_writer_state(&self);
+        let header = BlockHeader::from_block(&self);
         eprintln!("{header:?}");
 
         // write the block header
-        header.write(&mut self.inner)?;
+        header.write(writer)?;
 
         // write the internal state to the inner writer
-        self.write_to_inner()?;
+        self.write(writer)?;
 
         // clear the internal state
         self.clear();
 
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ColumnarBlockWriter<W: io::Write> {
+    /// Internal writer for the block
+    inner: W,
+
+    /// The block for this writer
+    block: ColumnarBlock,
+}
+impl<W: io::Write> ColumnarBlockWriter<W> {
+    pub fn new(inner: W, block_size: usize) -> Self {
+        Self {
+            inner,
+            block: ColumnarBlock::new(block_size),
+        }
+    }
+
+    pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
+        if !self.block.can_fit(&record) {
+            self.block.flush_to(&mut self.inner)?;
+        }
+        self.block.push(record)?;
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        self.block.flush_to(&mut self.inner)?;
         Ok(())
     }
 }
@@ -261,19 +268,19 @@ struct BlockHeader {
     nuclen: u64,
 }
 impl BlockHeader {
-    pub fn from_writer_state<W: io::Write>(writer: &ColumnarBlockWriter<W>) -> Self {
+    pub fn from_block(block: &ColumnarBlock) -> Self {
         Self {
             magic: *b"CBQ",
             version: 1,
             padding: [42; 4],
-            len_z_seq_len: writer.z_seq_len.len() as u64,
-            len_z_header_len: writer.z_header_len.len() as u64,
-            len_z_npos: writer.z_npos.len() as u64,
-            len_z_seq: writer.z_seq.len() as u64,
-            len_z_flags: writer.z_flags.len() as u64,
-            len_z_headers: writer.z_headers.len() as u64,
-            len_z_qual: writer.z_qual.len() as u64,
-            nuclen: writer.nuclen as u64,
+            len_z_seq_len: block.z_seq_len.len() as u64,
+            len_z_header_len: block.z_header_len.len() as u64,
+            len_z_npos: block.z_npos.len() as u64,
+            len_z_seq: block.z_seq.len() as u64,
+            len_z_flags: block.z_flags.len() as u64,
+            len_z_headers: block.z_headers.len() as u64,
+            len_z_qual: block.z_qual.len() as u64,
+            nuclen: block.nuclen as u64,
         }
     }
 
