@@ -6,7 +6,7 @@ use paraseq::{Record, fastx};
 use zstd::stream::copy_encode;
 
 #[derive(Clone)]
-struct ColumnarBlock<W: io::Write> {
+struct ColumnarBlockWriter<W: io::Write> {
     /// Internal writer for the block
     inner: W,
 
@@ -42,7 +42,7 @@ struct ColumnarBlock<W: io::Write> {
     /// Maximum size of this block (virtual)
     block_size: usize,
 }
-impl<W: io::Write> ColumnarBlock<W> {
+impl<W: io::Write> ColumnarBlockWriter<W> {
     pub fn new(inner: W, block_size: usize) -> Self {
         Self {
             inner,
@@ -261,7 +261,7 @@ struct BlockHeader {
     nuclen: u64,
 }
 impl BlockHeader {
-    pub fn from_writer_state<W: io::Write>(writer: &ColumnarBlock<W>) -> Self {
+    pub fn from_writer_state<W: io::Write>(writer: &ColumnarBlockWriter<W>) -> Self {
         Self {
             magic: *b"CBQ",
             version: 1,
@@ -381,7 +381,7 @@ fn main() -> Result<()> {
     let opath = "./data/some.cbq";
 
     let handle = io::BufWriter::new(fs::File::create(opath)?);
-    let mut writer = ColumnarBlock::new(handle, 1024 * 1024);
+    let mut writer = ColumnarBlockWriter::new(handle, 1024 * 1024);
 
     let mut reader = fastx::Reader::from_path(path)?;
     let mut rset = reader.new_record_set();
