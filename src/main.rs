@@ -1298,7 +1298,9 @@ impl MmapReader {
         let index = {
             // Load the index footer
             let footer_start = inner.len() - size_of::<IndexFooter>();
-            let index_footer = IndexFooter::from_bytes(&inner[footer_start..])?;
+            let mut footer_buf = [0u8; size_of::<IndexFooter>()];
+            footer_buf.copy_from_slice(&inner[footer_start..]);
+            let index_footer = IndexFooter::from_bytes(&footer_buf)?;
 
             // Find the coordinates of the compressed index
             let z_index_start = footer_start - index_footer.bytes as usize;
