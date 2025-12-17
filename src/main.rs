@@ -5,8 +5,11 @@ use bytemuck::{Pod, Zeroable, cast_slice, checked::cast_slice_mut};
 use paraseq::{Record, fastx};
 use zstd::stream::{copy_decode, copy_encode};
 
+pub const BLOCK_MAGIC: &[u8; 3] = b"BLK";
+pub const INDEX_MAGIC: &[u8; 8] = b"CBQINDEX";
+
 #[derive(Clone, Default)]
-struct ColumnarBlock {
+pub struct ColumnarBlock {
     /// Separate columns for each data type
     seq: Vec<u8>,
     flags: Vec<u64>,
@@ -50,6 +53,10 @@ impl ColumnarBlock {
             block_size,
             ..Default::default()
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.current_size == 0
     }
 
     /// Clears the internal data structures
@@ -275,7 +282,11 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    pub fn flush_to<W: io::Write>(&mut self, writer: &mut W) -> Result<()> {
+    pub fn flush_to<W: io::Write>(&mut self, writer: &mut W) -> Result<Option<BlockHeader>> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+
         // encode all sequences at once
         self.encode_sequence()?;
 
@@ -298,7 +309,7 @@ impl ColumnarBlock {
         // clear the internal state
         self.clear();
 
-        Ok(())
+        Ok(Some(header))
     }
 
     pub fn read_from<R: io::Read>(&mut self, reader: &mut R, header: BlockHeader) -> Result<()> {
@@ -336,34 +347,189 @@ struct ColumnarBlockWriter<W: io::Write> {
     /// Internal writer for the block
     inner: W,
 
-    /// The block for this writer
+    /// A reusable block for this writer
     block: ColumnarBlock,
+
+    /// Offsets of the blocks written by this writer
+    offsets: Vec<BlockHeader>,
 }
 impl<W: io::Write> ColumnarBlockWriter<W> {
     pub fn new(inner: W, block_size: usize) -> Self {
         Self {
             inner,
             block: ColumnarBlock::new(block_size),
+            offsets: Vec::default(),
         }
     }
 
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
         if !self.block.can_fit(&record) {
-            self.block.flush_to(&mut self.inner)?;
+            self.flush()?;
         }
         self.block.push(record)?;
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.block.flush_to(&mut self.inner)?;
+        self.block.flush_to(&mut self.inner)?.map(|header| {
+            self.offsets.push(header);
+        });
         Ok(())
+    }
+
+    pub fn finish(&mut self) -> Result<()> {
+        self.flush()?;
+        self.write_index()?;
+        Ok(())
+    }
+
+    fn write_index(&mut self) -> Result<()> {
+        let index = Index::from_block_headers(&self.offsets);
+        let z_index = index.encoded()?;
+        let header = IndexHeader::new(index.size(), z_index.len() as u64);
+        let footer = IndexFooter::new(z_index.len() as u64);
+
+        // Write the index to the inner writer
+        {
+            self.inner.write_all(header.as_bytes())?;
+            self.inner.write_all(&z_index)?;
+            self.inner.write_all(footer.as_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct IndexHeader {
+    /// Magic number identifying the index format
+    magic: [u8; 8],
+
+    /// Number of bytes in the uncompressed index
+    u_bytes: u64,
+
+    /// Number of bytes in the compressed index
+    z_bytes: u64,
+}
+impl IndexHeader {
+    /// Creates a new index header
+    pub fn new(u_bytes: u64, z_bytes: u64) -> Self {
+        Self {
+            magic: *INDEX_MAGIC,
+            u_bytes,
+            z_bytes,
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let header: Self = *bytemuck::from_bytes(bytes);
+        if header.magic != *INDEX_MAGIC {
+            bail!("Invalid index header magic");
+        }
+        Ok(header)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct IndexFooter {
+    /// Number of bytes in the compressed index
+    bytes: u64,
+
+    /// Magic number identifying the index format
+    magic: [u8; 8],
+}
+
+impl IndexFooter {
+    /// Creates a new index footer
+    pub fn new(bytes: u64) -> Self {
+        Self {
+            bytes,
+            magic: *INDEX_MAGIC,
+        }
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let footer: Self = *bytemuck::from_bytes(bytes);
+        if footer.magic != *INDEX_MAGIC {
+            bail!("Invalid index footer magic");
+        }
+        Ok(footer)
+    }
+}
+
+/// An index of block ranges for quick lookups
+pub struct Index {
+    ranges: Vec<BlockRange>,
+}
+impl Index {
+    /// Builds the index from a list of block headers
+    pub fn from_block_headers(block_headers: &[BlockHeader]) -> Self {
+        let mut offset = 0;
+        let mut cumulative_records = 0;
+        let mut ranges = Vec::default();
+        for block_header in block_headers {
+            let range = BlockRange::new(offset, cumulative_records + block_header.num_records);
+            offset += block_header.block_len() as u64;
+            cumulative_records += block_header.num_records;
+            ranges.push(range);
+        }
+        Self { ranges }
+    }
+
+    /// Returns the byte representation of the index
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.ranges)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let ranges = match bytemuck::try_cast_slice(bytes) {
+            Ok(ranges) => ranges.to_vec(),
+            Err(_) => bail!("Failed to cast bytes to Index"),
+        };
+        Ok(Self { ranges })
+    }
+
+    /// Returns the size of the index in bytes
+    pub fn size(&self) -> u64 {
+        self.as_bytes().len() as u64
+    }
+
+    /// Encodes the index into a ZSTD-compressed byte array
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let mut encoded = Vec::default();
+        copy_encode(self.as_bytes(), &mut encoded, 0)?;
+        Ok(encoded)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod, Default)]
+#[repr(C)]
+struct BlockRange {
+    /// Byte offset of this block
+    offset: u64,
+
+    /// Number of records up to and including this block
+    cumulative_records: u64,
+}
+impl BlockRange {
+    pub fn new(offset: u64, cumulative_records: u64) -> Self {
+        Self {
+            offset,
+            cumulative_records,
+        }
     }
 }
 
 #[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
-struct BlockHeader {
+pub struct BlockHeader {
     magic: [u8; 3],
     version: u8,
     padding: [u8; 4],
@@ -389,7 +555,7 @@ struct BlockHeader {
 impl BlockHeader {
     pub fn from_block(block: &ColumnarBlock) -> Self {
         Self {
-            magic: *b"CBQ",
+            magic: *BLOCK_MAGIC,
             version: 1,
             padding: [42; 4],
             len_z_seq_len: block.z_seq_len.len() as u64,
@@ -421,8 +587,12 @@ impl BlockHeader {
         bytemuck::bytes_of(self)
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        *bytemuck::from_bytes(bytes)
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let header: Self = *bytemuck::from_bytes(bytes);
+        if header.magic != *BLOCK_MAGIC {
+            bail!("Invalid Block Header found")
+        }
+        Ok(header)
     }
 
     pub fn write<W: io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
@@ -431,7 +601,7 @@ impl BlockHeader {
 }
 
 #[derive(Clone, Default)]
-struct SequencingRecord<'a> {
+pub struct SequencingRecord<'a> {
     s_seq: &'a [u8],
     s_qual: Option<&'a [u8]>,
     s_header: Option<&'a [u8]>,
@@ -480,20 +650,24 @@ impl<'a> SequencingRecord<'a> {
 pub struct Reader<R: io::Read> {
     inner: R,
     block: ColumnarBlock,
+    iheader: Option<IndexHeader>,
 }
 impl<R: io::Read> Reader<R> {
     pub fn new(inner: R) -> Self {
         Self {
             inner,
             block: ColumnarBlock::new(0),
+            iheader: None,
         }
     }
 
     pub fn read_block(&mut self) -> Result<bool> {
+        let mut iheader_buf = [0u8; size_of::<IndexHeader>()];
+        let mut diff_buf = [0u8; size_of::<BlockHeader>() - size_of::<IndexHeader>()];
         let mut header_buf = [0u8; size_of::<BlockHeader>()];
 
-        // Read the block header from the reader
-        match self.inner.read_exact(&mut header_buf) {
+        // Attempt to read the index header
+        match self.inner.read_exact(&mut iheader_buf) {
             Ok(_) => {}
             Err(e) => {
                 if e.kind() == io::ErrorKind::UnexpectedEof {
@@ -503,11 +677,54 @@ impl<R: io::Read> Reader<R> {
                 }
             }
         }
-        let header = BlockHeader::from_bytes(&header_buf);
+
+        // The stream is exhausted, no more blocks to read
+        if let Ok(iheader) = IndexHeader::from_bytes(&iheader_buf) {
+            self.iheader = Some(iheader);
+            return Ok(false);
+        } else {
+            // attempt to read the rest of the block header
+            match self.inner.read_exact(&mut diff_buf) {
+                Ok(_) => {}
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::UnexpectedEof {
+                        return Ok(false);
+                    } else {
+                        return Err(e.into());
+                    }
+                }
+            }
+            header_buf[..iheader_buf.len()].copy_from_slice(&iheader_buf);
+            header_buf[iheader_buf.len()..].copy_from_slice(&diff_buf);
+        }
+
+        let header = BlockHeader::from_bytes(&header_buf)?;
         self.block.read_from(&mut self.inner, header)?;
-        // eprintln!("{:?}", header);
 
         Ok(true)
+    }
+
+    pub fn read_index(&mut self) -> Result<Option<Index>> {
+        let Some(header) = self.iheader else {
+            return Ok(None);
+        };
+        let mut z_index_buf = Vec::new();
+        let mut index_buf = Vec::new();
+        let mut footer_buf = [0u8; size_of::<IndexFooter>()];
+
+        // Read the index data from the reader
+        z_index_buf.resize(header.z_bytes as usize, 0);
+
+        // Reads the compressed index data
+        self.inner.read_exact(&mut z_index_buf)?;
+        copy_decode(z_index_buf.as_slice(), &mut index_buf)?;
+        let index = Index::from_bytes(&index_buf)?;
+
+        // Read the footer data from the reader
+        self.inner.read_exact(&mut footer_buf)?;
+        let _footer = IndexFooter::from_bytes(&footer_buf)?;
+
+        Ok(Some(index))
     }
 }
 
@@ -533,7 +750,7 @@ fn write_file(ipath: &str, opath: &str) -> Result<()> {
             writer.push(ref_record)?;
         }
     }
-    writer.flush()?;
+    writer.finish()?;
 
     Ok(())
 }
@@ -544,8 +761,8 @@ fn read_file(ipath: &str) -> Result<()> {
 
     while reader.read_block()? {
         reader.block.decompress_columns()?;
-        // break;
     }
+    reader.read_index()?;
     Ok(())
 }
 
