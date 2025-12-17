@@ -1,8 +1,11 @@
-use std::{fs, io};
+use std::{fs, io, path::Path, sync::Arc, thread};
 
 use anyhow::{Result, bail};
+use binseq::{BinseqRecord, ParallelProcessor, ParallelReader};
 use bytemuck::{Pod, Zeroable, cast_slice, checked::cast_slice_mut};
+use memmap2::Mmap;
 use paraseq::{Record, fastx};
+use parking_lot::Mutex;
 use zstd::stream::{copy_decode, copy_encode};
 
 pub const FILE_MAGIC: &[u8; 7] = b"CBQFILE";
@@ -140,17 +143,17 @@ pub struct ColumnarBlock {
     num_npos: usize,
     /// Current size of this block (virtual)
     current_size: usize,
-    /// Maximum size of this block (virtual)
-    block_size: usize,
-    /// Compression level for zstd
-    compression_level: i32,
+
+    /// The file header (used for block configuration)
+    ///
+    /// Not to be confused with the `BlockHeader`
+    header: FileHeader,
 }
 impl ColumnarBlock {
     /// Create a new columnar block with the given block size
     pub fn new(header: FileHeader) -> Self {
         Self {
-            block_size: header.block_size as usize,
-            compression_level: header.compression_level as i32,
+            header,
             ..Default::default()
         }
     }
@@ -235,7 +238,7 @@ impl ColumnarBlock {
     }
 
     fn can_fit(&self, record: &SequencingRecord<'_>) -> bool {
-        self.current_size + record.size() <= self.block_size
+        self.current_size + record.size() <= self.header.block_size as usize
     }
 
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
@@ -290,14 +293,14 @@ impl ColumnarBlock {
         copy_encode(
             cast_slice(&self.l_seq),
             &mut self.z_seq_len,
-            self.compression_level,
+            self.header.compression_level as i32,
         )?;
 
         if self.headers.len() > 0 {
             copy_encode(
                 cast_slice(&self.l_headers),
                 &mut self.z_header_len,
-                self.compression_level,
+                self.header.compression_level as i32,
             )?;
         }
 
@@ -306,7 +309,7 @@ impl ColumnarBlock {
             copy_encode(
                 cast_slice(&self.npos),
                 &mut self.z_npos,
-                self.compression_level,
+                self.header.compression_level as i32,
             )?;
         }
 
@@ -314,7 +317,7 @@ impl ColumnarBlock {
         copy_encode(
             cast_slice(&self.ebuf),
             &mut self.z_seq,
-            self.compression_level,
+            self.header.compression_level as i32,
         )?;
 
         // compress flags
@@ -322,7 +325,7 @@ impl ColumnarBlock {
             copy_encode(
                 cast_slice(&self.flags),
                 &mut self.z_flags,
-                self.compression_level,
+                self.header.compression_level as i32,
             )?;
         }
 
@@ -331,7 +334,7 @@ impl ColumnarBlock {
             copy_encode(
                 cast_slice(&self.headers),
                 &mut self.z_headers,
-                self.compression_level,
+                self.header.compression_level as i32,
             )?;
         }
 
@@ -340,7 +343,7 @@ impl ColumnarBlock {
             copy_encode(
                 cast_slice(&self.qual),
                 &mut self.z_qual,
-                self.compression_level,
+                self.header.compression_level as i32,
             )?;
         }
 
@@ -375,7 +378,6 @@ impl ColumnarBlock {
             self.ebuf.resize(self.ebuf_len(), 0);
             copy_decode(self.z_seq.as_slice(), cast_slice_mut(&mut self.ebuf))?;
 
-            self.seq.resize(self.nuclen, 0);
             bitnuc::twobit::decode(&self.ebuf, self.nuclen, &mut self.seq)?;
             self.backfill_npos();
         }
@@ -462,12 +464,251 @@ impl ColumnarBlock {
         extension_read(reader, &mut self.z_qual, header.len_z_qual as usize)?;
         Ok(())
     }
+
+    pub fn fill_from_bytes(&mut self, bytes: &[u8], header: BlockHeader) -> Result<()> {
+        let mut reader = io::Cursor::new(bytes);
+        self.read_from(&mut reader, header)
+    }
+
+    pub fn iter_records(&self, range: BlockRange) -> RefRecordIter<'_> {
+        RefRecordIter {
+            block: self,
+            range,
+            index: 0,
+            l_seq_offsets: calculate_offsets(&self.l_seq),
+            l_header_offsets: calculate_offsets(&self.l_headers),
+        }
+    }
 }
 
 fn extension_read<R: io::Read>(reader: &mut R, dst: &mut Vec<u8>, size: usize) -> Result<()> {
     dst.resize(size, 0);
     reader.read_exact(dst)?;
     Ok(())
+}
+
+fn calculate_offsets(values: &[u64]) -> Vec<u64> {
+    let mut offsets = vec![0; values.len()];
+    for i in 1..values.len() {
+        offsets[i] = offsets[i - 1] + values[i - 1];
+    }
+    offsets
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
+    offset: usize,
+    length: usize,
+}
+impl Span {
+    pub fn new(offset: usize, length: usize) -> Self {
+        Span { offset, length }
+    }
+
+    pub fn new_u64(offset: u64, length: u64) -> Self {
+        Span {
+            offset: offset as usize,
+            length: length as usize,
+        }
+    }
+
+    pub fn range(&self) -> std::ops::Range<usize> {
+        self.offset..self.offset + self.length
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+}
+
+pub struct RefRecordIter<'a> {
+    block: &'a ColumnarBlock,
+    range: BlockRange,
+    index: usize,
+
+    // precomputed offsets
+    l_seq_offsets: Vec<u64>,
+    l_header_offsets: Vec<u64>,
+}
+impl<'a> Iterator for RefRecordIter<'a> {
+    type Item = RefRecord<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.block.num_records {
+            None
+        } else {
+            let sseq_span =
+                Span::new_u64(self.l_seq_offsets[self.index], self.block.l_seq[self.index]);
+            let sheader_span = if self.block.header.has_headers() {
+                Some(Span::new_u64(
+                    self.l_header_offsets[self.index],
+                    self.block.l_headers[self.index],
+                ))
+            } else {
+                None
+            };
+            let xseq_span = if self.block.header.is_paired() {
+                Some(Span::new_u64(
+                    self.l_seq_offsets[self.index + 1],
+                    self.block.l_seq[self.index + 1],
+                ))
+            } else {
+                None
+            };
+            let xheader_span = if self.block.header.is_paired() && self.block.header.has_headers() {
+                Some(Span::new_u64(
+                    self.l_header_offsets[self.index + 1],
+                    self.block.l_headers[self.index + 1],
+                ))
+            } else {
+                None
+            };
+
+            let record = RefRecord {
+                block: self.block,
+                range: self.range,
+                index: self.index,
+                sseq_span,
+                sheader_span,
+                xseq_span,
+                xheader_span,
+            };
+
+            if self.block.header.is_paired() {
+                self.index += 2;
+            } else {
+                self.index += 1;
+            }
+            Some(record)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RefRecord<'a> {
+    /// A reference to the block containing this record
+    block: &'a ColumnarBlock,
+
+    /// The block range
+    range: BlockRange,
+
+    /// Local index of this record within the block
+    index: usize,
+
+    /// Span of the primary sequence within the block
+    sseq_span: Span,
+
+    /// Span of the extended sequence within the block
+    xseq_span: Option<Span>,
+
+    /// Span of the primary header within the block
+    sheader_span: Option<Span>,
+
+    /// Span of the extended header within the block
+    xheader_span: Option<Span>,
+}
+impl<'a> RefRecord<'a> {
+    /// Returns the paired index of this record within the block
+    ///
+    /// Note: Paired records are stored sequentially but the `RefRecord` struct's index is
+    /// is the index of the Pair not the index of the individual records themselves.
+    pub fn p_idx(&self) -> usize {
+        if self.is_paired() {
+            self.index * 2
+        } else {
+            self.index
+        }
+    }
+}
+impl<'a> BinseqRecord for RefRecord<'a> {
+    fn bitsize(&self) -> binseq::BitSize {
+        binseq::BitSize::Two
+    }
+
+    fn index(&self) -> u64 {
+        self.range.cumulative_records - (self.block.num_records + self.index) as u64
+    }
+
+    fn flag(&self) -> Option<u64> {
+        self.block.flags.get(self.index).copied()
+    }
+
+    fn is_paired(&self) -> bool {
+        self.block.header.is_paired()
+    }
+
+    fn sheader(&self) -> &[u8] {
+        if let Some(span) = self.sheader_span {
+            &self.block.headers[span.range()]
+        } else {
+            &[]
+        }
+    }
+
+    fn xheader(&self) -> &[u8] {
+        if let Some(span) = self.xheader_span {
+            &self.block.headers[span.range()]
+        } else {
+            &[]
+        }
+    }
+
+    fn sbuf(&self) -> &[u64] {
+        unimplemented!("sbuf is not implemented for cbq")
+    }
+
+    fn xbuf(&self) -> &[u64] {
+        unimplemented!("xbuf is not implemented for cbq")
+    }
+
+    fn slen(&self) -> u64 {
+        self.sseq_span.len() as u64
+    }
+
+    fn xlen(&self) -> u64 {
+        self.xseq_span.map_or(0, |span| span.len() as u64)
+    }
+
+    fn decode_s(&self, buf: &mut Vec<u8>) -> binseq::Result<()> {
+        buf.extend_from_slice(self.sseq());
+        Ok(())
+    }
+
+    fn decode_x(&self, buf: &mut Vec<u8>) -> binseq::Result<()> {
+        buf.extend_from_slice(self.xseq());
+        Ok(())
+    }
+
+    fn sseq(&self) -> &[u8] {
+        &self.block.seq[self.sseq_span.range()]
+    }
+
+    fn xseq(&self) -> &[u8] {
+        self.xseq_span
+            .map_or(&[], |span| &self.block.seq[span.range()])
+    }
+
+    fn has_quality(&self) -> bool {
+        self.block.header.has_qualities()
+    }
+
+    fn squal(&self) -> &[u8] {
+        if self.has_quality() {
+            &self.block.qual[self.sseq_span.range()]
+        } else {
+            &[]
+        }
+    }
+
+    fn xqual(&self) -> &[u8] {
+        if self.has_quality()
+            && let Some(span) = self.xseq_span
+        {
+            &self.block.qual[span.range()]
+        } else {
+            &[]
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -604,6 +845,7 @@ impl IndexFooter {
 }
 
 /// An index of block ranges for quick lookups
+#[derive(Clone)]
 pub struct Index {
     ranges: Vec<BlockRange>,
 }
@@ -646,11 +888,48 @@ impl Index {
         copy_encode(self.as_bytes(), &mut encoded, 0)?;
         Ok(encoded)
     }
+
+    /// Returns the number of records in the index
+    pub fn num_records(&self) -> usize {
+        self.ranges
+            .last()
+            .map_or(0, |range| range.cumulative_records as usize)
+    }
+
+    /// Returns the number of blocks in the index
+    pub fn num_blocks(&self) -> usize {
+        self.ranges.len()
+    }
+
+    pub fn iter_blocks(&self) -> BlockIter<'_> {
+        BlockIter {
+            index: self,
+            pos: 0,
+        }
+    }
+}
+
+pub struct BlockIter<'a> {
+    index: &'a Index,
+    pos: usize,
+}
+impl Iterator for BlockIter<'_> {
+    type Item = BlockRange;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.index.num_blocks() {
+            None
+        } else {
+            let block = self.index.ranges[self.pos];
+            self.pos += 1;
+            Some(block)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod, Default)]
 #[repr(C)]
-struct BlockRange {
+pub struct BlockRange {
     /// Byte offset of this block
     offset: u64,
 
@@ -871,6 +1150,128 @@ impl<R: io::Read> Reader<R> {
     }
 }
 
+#[derive(Clone)]
+pub struct MmapReader {
+    inner: Arc<Mmap>,
+    index: Arc<Index>,
+
+    /// Reusable record block
+    block: ColumnarBlock,
+}
+impl MmapReader {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let file = fs::File::open(path)?;
+
+        // Load the mmap
+        let inner = unsafe { Mmap::map(&file) }?;
+
+        // Build the header
+        let header = FileHeader::from_bytes(&inner[..size_of::<FileHeader>()])?;
+
+        // build the index
+        let index = {
+            // Load the index footer
+            let footer_start = inner.len() - size_of::<IndexFooter>();
+            let index_footer = IndexFooter::from_bytes(&inner[footer_start..])?;
+
+            // Find the coordinates of the compressed index
+            let z_index_start = footer_start - index_footer.bytes as usize;
+            let z_index_slice = &inner[z_index_start..footer_start];
+
+            // Decompress the index
+            let mut index_buf = Vec::default();
+            copy_decode(z_index_slice, &mut index_buf)?;
+
+            // Load the index
+            Index::from_bytes(&index_buf)
+        }?;
+
+        Ok(Self {
+            inner: Arc::new(inner),
+            index: Arc::new(index),
+            block: ColumnarBlock::new(header),
+        })
+    }
+
+    pub fn num_records(&self) -> usize {
+        self.index.num_records()
+    }
+
+    fn load_block(&mut self, range: BlockRange) -> Result<()> {
+        let header_start = range.offset as usize;
+        let header_end = size_of::<BlockHeader>() + header_start;
+        let block_header = {
+            let mut block_header_buf = [0u8; size_of::<BlockHeader>()];
+            block_header_buf.copy_from_slice(&self.inner[header_start..header_end]);
+            BlockHeader::from_bytes(&block_header_buf)
+        }?;
+
+        let data_end = header_end + block_header.block_len();
+        let block_data_slice = &self.inner[header_end..data_end];
+        self.block.fill_from_bytes(block_data_slice, block_header)?;
+        self.block.decompress_columns()?;
+        Ok(())
+    }
+}
+impl ParallelReader for MmapReader {
+    fn process_parallel<P: ParallelProcessor + Clone + 'static>(
+        self,
+        processor: P,
+        num_threads: usize,
+    ) -> binseq::Result<()> {
+        let num_threads = if num_threads == 0 {
+            num_cpus::get()
+        } else {
+            num_threads.min(num_cpus::get())
+        };
+
+        let blocks_per_thread = self.index.num_blocks().div_ceil(num_threads);
+
+        let mut handles = Vec::new();
+        for thread_id in 0..num_threads {
+            let start_block_idx = thread_id * blocks_per_thread;
+            let end_block_idx = ((thread_id + 1) * blocks_per_thread).min(self.index.num_blocks());
+            let mut t_reader = self.clone();
+            let mut t_proc = processor.clone();
+
+            let thread_handle = thread::spawn(move || -> binseq::Result<()> {
+                // Pull all block ranges for this thread
+                let t_block_ranges: Vec<_> = t_reader
+                    .index
+                    .iter_blocks()
+                    .skip(start_block_idx)
+                    .take(end_block_idx - start_block_idx)
+                    .collect();
+
+                for range in t_block_ranges {
+                    t_reader.load_block(range)?;
+                    for record in t_reader.block.iter_records(range) {
+                        t_proc.process_record(record)?;
+                    }
+                    t_proc.on_batch_complete()?;
+                }
+
+                Ok(())
+            });
+            handles.push(thread_handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap()?;
+        }
+        Ok(())
+    }
+
+    fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
+        self,
+        _processor: P,
+        _num_threads: usize,
+        _range: std::ops::Range<usize>,
+    ) -> binseq::Result<()> {
+        unimplemented!()
+    }
+}
+
 fn write_file(ipath: &str, opath: &str) -> Result<()> {
     let handle = io::BufWriter::new(fs::File::create(opath)?);
     let header = FileHeader::default();
@@ -910,6 +1311,83 @@ fn read_file(ipath: &str) -> Result<()> {
     Ok(())
 }
 
+type BoxedWriter = Box<dyn io::Write + Send>;
+
+#[derive(Clone)]
+pub struct Processor {
+    l_records: usize,
+    l_buf: Vec<u8>,
+
+    records: Arc<Mutex<usize>>,
+    writer: Arc<Mutex<BoxedWriter>>,
+}
+impl Processor {
+    pub fn new(writer: BoxedWriter) -> Self {
+        Self {
+            l_records: 0,
+            l_buf: Vec::new(),
+            records: Arc::new(Mutex::new(0)),
+            writer: Arc::new(Mutex::new(writer)),
+        }
+    }
+
+    pub fn n_records(&self) -> usize {
+        *self.records.lock()
+    }
+}
+impl ParallelProcessor for Processor {
+    fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
+        write_fastq(
+            &mut self.l_buf,
+            record.sheader(),
+            record.sseq(),
+            record.squal(),
+        )?;
+        if record.is_paired() {
+            write_fastq(
+                &mut self.l_buf,
+                record.xheader(),
+                record.xseq(),
+                record.xqual(),
+            )?;
+        }
+        self.l_records += 1;
+        Ok(())
+    }
+    fn on_batch_complete(&mut self) -> binseq::Result<()> {
+        {
+            let mut writer = self.writer.lock();
+            writer.write_all(&self.l_buf)?;
+            writer.flush()?;
+        }
+        self.l_buf.clear();
+
+        *self.records.lock() += self.l_records;
+        self.l_records = 0;
+        Ok(())
+    }
+}
+
+fn write_fastq<W: io::Write>(writer: &mut W, header: &[u8], seq: &[u8], qual: &[u8]) -> Result<()> {
+    writer.write_all(b"@")?;
+    writer.write_all(header)?;
+    writer.write_all(b"\n")?;
+    writer.write_all(seq)?;
+    writer.write_all(b"\n")?;
+    writer.write_all(b"+\n")?;
+    writer.write_all(qual)?;
+    writer.write_all(b"\n")?;
+    Ok(())
+}
+
+fn read_mmap(ipath: &str) -> Result<()> {
+    let reader = MmapReader::new(ipath)?;
+    let proc = Processor::new(Box::new(io::stdout()));
+    reader.process_parallel(proc.clone(), 0)?;
+    println!("Number of records: {}", proc.n_records());
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let ipath = "./data/some.fq.gz";
     let opath = "./data/some.cbq";
@@ -919,6 +1397,9 @@ fn main() -> Result<()> {
 
     eprintln!("Reading file {}", opath);
     read_file(opath)?;
+
+    eprintln!("Reading file {} using memory mapping", opath);
+    read_mmap(opath)?;
 
     Ok(())
 }
