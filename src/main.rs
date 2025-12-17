@@ -1,9 +1,9 @@
 use std::{fs, io};
 
 use anyhow::{Result, bail};
-use bytemuck::{Pod, Zeroable, cast_slice};
+use bytemuck::{Pod, Zeroable, cast_slice, checked::cast_slice_mut};
 use paraseq::{Record, fastx};
-use zstd::stream::copy_encode;
+use zstd::stream::{copy_decode, copy_encode};
 
 #[derive(Clone, Default)]
 struct ColumnarBlock {
@@ -32,8 +32,14 @@ struct ColumnarBlock {
     z_headers: Vec<u8>,
     z_qual: Vec<u8>,
 
+    /// Length of the encoded sequence
+    ebuf_len: usize,
+    /// Number of records in the block
+    num_records: usize,
     /// Total nucleotides in this block
     nuclen: usize,
+    /// Number of npos positions
+    num_npos: usize,
     /// Current size of this block (virtual)
     current_size: usize,
     /// Maximum size of this block (virtual)
@@ -50,8 +56,13 @@ impl ColumnarBlock {
 
     /// Clears the internal data structures
     fn clear(&mut self) {
-        self.nuclen = 0;
-        self.current_size = 0;
+        // clear index counters
+        {
+            self.nuclen = 0;
+            self.num_records = 0;
+            self.current_size = 0;
+            self.num_npos = 0;
+        }
 
         // clear spans
         {
@@ -131,21 +142,38 @@ impl ColumnarBlock {
         self.add_flag(&record);
         self.add_headers(&record);
         self.add_quality(&record);
+        if record.is_paired() {
+            self.num_records += 2;
+        } else {
+            self.num_records += 1;
+        }
         self.current_size += record.size();
 
         Ok(())
     }
 
+    /// Encode the sequence into a compressed representation
     fn encode_sequence(&mut self) -> Result<()> {
         bitnuc::twobit::encode_with_invalid(&self.seq, &mut self.ebuf)?;
+        self.ebuf_len = self.ebuf.len();
         Ok(())
     }
 
+    /// Find all positions of 'N' in the sequence
     fn fill_npos(&mut self) {
         self.npos
-            .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64))
+            .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64));
+        self.num_npos = self.npos.len() as usize;
     }
 
+    /// Convert all ambiguous bases back to N
+    fn backfill_npos(&mut self) {
+        self.npos.iter().for_each(|idx| {
+            self.seq.get_mut(*idx as usize).map(|base| *base = b'N');
+        });
+    }
+
+    /// Compress all native columns into compressed representation
     fn compress_columns(&mut self) -> Result<()> {
         // compress sequence lengths
         copy_encode(cast_slice(&self.l_seq), &mut self.z_seq_len, 0)?;
@@ -180,6 +208,58 @@ impl ColumnarBlock {
         Ok(())
     }
 
+    /// Decompress all columns back to native representation
+    fn decompress_columns(&mut self) -> Result<()> {
+        // decompress sequence lengths
+        {
+            self.l_seq.resize(self.num_records, 0);
+            copy_decode(self.z_seq_len.as_slice(), cast_slice_mut(&mut self.l_seq))?;
+        }
+
+        // decompress header lengths
+        if self.z_header_len.len() > 0 {
+            self.l_headers.resize(self.num_records, 0);
+            copy_decode(
+                self.z_header_len.as_slice(),
+                cast_slice_mut(&mut self.l_headers),
+            )?;
+        }
+
+        // decompress npos
+        if self.z_npos.len() > 0 {
+            self.npos.resize(self.num_npos, 0);
+            copy_decode(self.z_npos.as_slice(), cast_slice_mut(&mut self.npos))?;
+        }
+
+        // decompress sequence
+        {
+            self.ebuf.resize(self.ebuf_len, 0);
+            copy_decode(self.z_seq.as_slice(), cast_slice_mut(&mut self.ebuf))?;
+
+            self.seq.resize(self.nuclen, 0);
+            bitnuc::twobit::decode(&self.ebuf, self.nuclen, &mut self.seq)?;
+            self.backfill_npos();
+        }
+
+        // decompress flags
+        if self.z_flags.len() > 0 {
+            self.flags.resize(self.num_records, 0);
+            copy_decode(self.z_flags.as_slice(), cast_slice_mut(&mut self.flags))?;
+        }
+
+        // decompress headers
+        if self.z_headers.len() > 0 {
+            copy_decode(self.z_headers.as_slice(), &mut self.headers)?;
+        }
+
+        // decompress quality scores
+        if self.z_qual.len() > 0 {
+            copy_decode(self.z_qual.as_slice(), &mut self.qual)?;
+        }
+
+        Ok(())
+    }
+
     fn write<W: io::Write>(&mut self, writer: &mut W) -> Result<()> {
         writer.write_all(&self.z_seq_len)?;
         writer.write_all(&self.z_header_len)?;
@@ -203,7 +283,7 @@ impl ColumnarBlock {
 
         // build the block header
         let header = BlockHeader::from_block(&self);
-        eprintln!("{header:?}");
+        // eprintln!("{header:?}");
 
         // write the block header
         header.write(writer)?;
@@ -216,6 +296,36 @@ impl ColumnarBlock {
 
         Ok(())
     }
+
+    pub fn read_from<R: io::Read>(&mut self, reader: &mut R, header: BlockHeader) -> Result<()> {
+        // clears the internal state
+        self.clear();
+
+        // reload the internal state from the reader
+        self.nuclen = header.nuclen as usize;
+        self.num_records = header.num_records as usize;
+        self.num_npos = header.num_npos as usize;
+        self.ebuf_len = header.ebuf_len as usize;
+
+        extension_read(reader, &mut self.z_seq_len, header.len_z_seq_len as usize)?;
+        extension_read(
+            reader,
+            &mut self.z_header_len,
+            header.len_z_header_len as usize,
+        )?;
+        extension_read(reader, &mut self.z_npos, header.len_z_npos as usize)?;
+        extension_read(reader, &mut self.z_seq, header.len_z_seq as usize)?;
+        extension_read(reader, &mut self.z_flags, header.len_z_flags as usize)?;
+        extension_read(reader, &mut self.z_headers, header.len_z_headers as usize)?;
+        extension_read(reader, &mut self.z_qual, header.len_z_qual as usize)?;
+        Ok(())
+    }
+}
+
+fn extension_read<R: io::Read>(reader: &mut R, dst: &mut Vec<u8>, size: usize) -> Result<()> {
+    dst.resize(size, 0);
+    reader.read_exact(dst)?;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -266,6 +376,15 @@ struct BlockHeader {
 
     // full decoded length of the sequence block
     nuclen: u64,
+
+    // length of the encoded sequence
+    ebuf_len: u64,
+
+    // number of npos positions
+    num_npos: u64,
+
+    // number of records in the block
+    num_records: u64,
 }
 impl BlockHeader {
     pub fn from_block(block: &ColumnarBlock) -> Self {
@@ -281,6 +400,9 @@ impl BlockHeader {
             len_z_headers: block.z_headers.len() as u64,
             len_z_qual: block.z_qual.len() as u64,
             nuclen: block.nuclen as u64,
+            num_npos: block.num_npos as u64,
+            num_records: block.num_records as u64,
+            ebuf_len: block.ebuf.len() as u64,
         }
     }
 
@@ -293,8 +415,7 @@ impl BlockHeader {
             + self.len_z_seq
             + self.len_z_flags
             + self.len_z_headers
-            + self.len_z_qual
-            + self.nuclen) as usize
+            + self.len_z_qual) as usize
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -351,14 +472,22 @@ impl<'a> SequencingRecord<'a> {
             + self.x_header.map_or(0, |h| h.len())
             + self.flag.map_or(0, |f| f.to_le_bytes().len())
     }
+
+    pub fn is_paired(&self) -> bool {
+        self.x_seq.is_some()
+    }
 }
 
 pub struct Reader<R: io::Read> {
     inner: R,
+    block: ColumnarBlock,
 }
 impl<R: io::Read> Reader<R> {
     pub fn new(inner: R) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            block: ColumnarBlock::new(0),
+        }
     }
 
     pub fn read_block(&mut self) -> Result<bool> {
@@ -376,21 +505,18 @@ impl<R: io::Read> Reader<R> {
             }
         }
         let header = BlockHeader::from_bytes(&header_buf);
-
-        eprintln!("{:?}", header);
+        self.block.read_from(&mut self.inner, header)?;
+        // eprintln!("{:?}", header);
 
         Ok(true)
     }
 }
 
-fn main() -> Result<()> {
-    let path = "./data/some.fq.gz";
-    let opath = "./data/some.cbq";
-
+fn write_file(ipath: &str, opath: &str) -> Result<()> {
     let handle = io::BufWriter::new(fs::File::create(opath)?);
     let mut writer = ColumnarBlockWriter::new(handle, 1024 * 1024);
 
-    let mut reader = fastx::Reader::from_path(path)?;
+    let mut reader = fastx::Reader::from_path(ipath)?;
     let mut rset = reader.new_record_set();
     while rset.fill(&mut reader)? {
         for res in rset.iter() {
@@ -409,6 +535,30 @@ fn main() -> Result<()> {
         }
     }
     writer.flush()?;
+
+    Ok(())
+}
+
+fn read_file(ipath: &str) -> Result<()> {
+    let rhandle = fs::File::open(ipath).map(io::BufReader::new)?;
+    let mut reader = Reader::new(rhandle);
+
+    while reader.read_block()? {
+        reader.block.decompress_columns()?;
+        // break;
+    }
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let ipath = "./data/some.fq.gz";
+    let opath = "./data/some.cbq";
+
+    eprintln!("Writing file {} - reading from {}", opath, ipath);
+    write_file(ipath, opath)?;
+
+    eprintln!("Reading file {}", opath);
+    read_file(opath)?;
 
     Ok(())
 }
