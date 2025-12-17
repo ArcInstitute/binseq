@@ -498,7 +498,7 @@ impl ColumnarBlock {
 
         // decompress sequence lengths
         {
-            self.l_seq.resize(self.num_records, 0);
+            resize_uninit(&mut self.l_seq, self.num_records);
             dctx.decompress(
                 cast_slice_mut(&mut self.l_seq),
                 slice_and_increment(&mut byte_offset, header.len_z_seq_len, bytes),
@@ -508,7 +508,7 @@ impl ColumnarBlock {
 
         // decompress header lengths
         if header.len_z_header_len > 0 {
-            self.l_headers.resize(self.num_records, 0);
+            resize_uninit(&mut self.l_headers, self.num_records);
             dctx.decompress(
                 cast_slice_mut(&mut self.l_headers),
                 slice_and_increment(&mut byte_offset, header.len_z_header_len, bytes),
@@ -524,7 +524,7 @@ impl ColumnarBlock {
 
         // decompress npos
         if header.len_z_npos > 0 {
-            self.npos.resize(self.num_npos, 0);
+            resize_uninit(&mut self.npos, self.num_npos);
             dctx.decompress(
                 cast_slice_mut(&mut self.npos),
                 slice_and_increment(&mut byte_offset, header.len_z_npos, bytes),
@@ -534,7 +534,8 @@ impl ColumnarBlock {
 
         // decompress sequence
         {
-            self.ebuf.resize(self.ebuf_len(), 0);
+            let ebuf_len = self.ebuf_len();
+            resize_uninit(&mut self.ebuf, ebuf_len);
             dctx.decompress(
                 cast_slice_mut(&mut self.ebuf),
                 slice_and_increment(&mut byte_offset, header.len_z_seq, bytes),
@@ -547,7 +548,7 @@ impl ColumnarBlock {
 
         // decompress flags
         if header.len_z_flags > 0 {
-            self.flags.resize(self.num_records, 0);
+            resize_uninit(&mut self.flags, self.num_records);
             dctx.decompress(
                 cast_slice_mut(&mut self.flags),
                 slice_and_increment(&mut byte_offset, header.len_z_flags, bytes),
@@ -557,11 +558,10 @@ impl ColumnarBlock {
 
         // decompress headers
         if header.len_z_headers > 0 {
-            self.headers.resize(
-                (self.l_header_offsets.last().copied().unwrap_or(0)
-                    + self.l_headers.last().copied().unwrap_or(0)) as usize,
-                0,
-            );
+            let headers_len = (self.l_header_offsets.last().copied().unwrap_or(0)
+                + self.l_headers.last().copied().unwrap_or(0))
+                as usize;
+            resize_uninit(&mut self.headers, headers_len);
             dctx.decompress(
                 &mut self.headers,
                 slice_and_increment(&mut byte_offset, header.len_z_headers, bytes),
@@ -571,7 +571,7 @@ impl ColumnarBlock {
 
         // decompress quality scores
         if header.len_z_qual > 0 {
-            self.qual.resize(self.nuclen, 0);
+            resize_uninit(&mut self.qual, self.nuclen);
             dctx.decompress(
                 &mut self.qual,
                 slice_and_increment(&mut byte_offset, header.len_z_qual, bytes),
@@ -587,6 +587,8 @@ impl ColumnarBlock {
             block: self,
             range,
             index: 0,
+            is_paired: self.header.is_paired(),
+            has_headers: self.header.has_headers(),
         }
     }
 }
@@ -601,6 +603,32 @@ fn slice_and_increment<'a>(offset: &mut usize, len: u64, bytes: &'a [u8]) -> &'a
     let slice = &bytes[*offset..*offset + len as usize];
     *offset += len as usize;
     slice
+}
+
+/// Resize a vector to the target length without initializing new elements.
+///
+/// # Safety
+/// The caller must ensure that all elements in the range [old_len..new_len]
+/// are initialized before reading them. This is safe when immediately followed
+/// by operations that write to the entire buffer (e.g., decompression).
+#[inline]
+fn resize_uninit<T>(vec: &mut Vec<T>, new_len: usize) {
+    match new_len.cmp(&vec.len()) {
+        std::cmp::Ordering::Greater => {
+            // Growing: reserve and set length (unsafe but fast)
+            vec.reserve(new_len - vec.len());
+            unsafe {
+                vec.set_len(new_len);
+            }
+        }
+        std::cmp::Ordering::Less => {
+            // Shrinking: truncate (safe and fast)
+            vec.truncate(new_len);
+        }
+        std::cmp::Ordering::Equal => {
+            // Same size: do nothing
+        }
+    }
 }
 
 fn calculate_offsets(values: &[u64], offsets: &mut Vec<u64>) {
@@ -641,6 +669,8 @@ pub struct RefRecordIter<'a> {
     block: &'a ColumnarBlock,
     range: BlockRange,
     index: usize,
+    is_paired: bool,
+    has_headers: bool,
 }
 impl<'a> Iterator for RefRecordIter<'a> {
     type Item = RefRecord<'a>;
@@ -653,7 +683,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 self.block.l_seq_offsets[self.index],
                 self.block.l_seq[self.index],
             );
-            let sheader_span = if self.block.header.has_headers() {
+            let sheader_span = if self.has_headers {
                 Some(Span::new_u64(
                     self.block.l_header_offsets[self.index],
                     self.block.l_headers[self.index],
@@ -661,7 +691,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
             } else {
                 None
             };
-            let xseq_span = if self.block.header.is_paired() {
+            let xseq_span = if self.is_paired {
                 Some(Span::new_u64(
                     self.block.l_seq_offsets[self.index + 1],
                     self.block.l_seq[self.index + 1],
@@ -669,7 +699,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
             } else {
                 None
             };
-            let xheader_span = if self.block.header.is_paired() && self.block.header.has_headers() {
+            let xheader_span = if self.is_paired && self.has_headers {
                 Some(Span::new_u64(
                     self.block.l_header_offsets[self.index + 1],
                     self.block.l_headers[self.index + 1],
@@ -688,11 +718,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 xheader_span,
             };
 
-            if self.block.header.is_paired() {
-                self.index += 2;
-            } else {
-                self.index += 1;
-            }
+            self.index += 1 + self.is_paired as usize;
             Some(record)
         }
     }
@@ -721,19 +747,6 @@ pub struct RefRecord<'a> {
     /// Span of the extended header within the block
     xheader_span: Option<Span>,
 }
-impl<'a> RefRecord<'a> {
-    /// Returns the paired index of this record within the block
-    ///
-    /// Note: Paired records are stored sequentially but the `RefRecord` struct's index is
-    /// is the index of the Pair not the index of the individual records themselves.
-    pub fn p_idx(&self) -> usize {
-        if self.is_paired() {
-            self.index * 2
-        } else {
-            self.index
-        }
-    }
-}
 impl<'a> BinseqRecord for RefRecord<'a> {
     fn bitsize(&self) -> binseq::BitSize {
         binseq::BitSize::Two
@@ -748,7 +761,7 @@ impl<'a> BinseqRecord for RefRecord<'a> {
     }
 
     fn is_paired(&self) -> bool {
-        self.block.header.is_paired()
+        self.xseq_span.is_some()
     }
 
     fn sheader(&self) -> &[u8] {
