@@ -1210,7 +1210,7 @@ impl<R: io::Read> Reader<R> {
         })
     }
 
-    pub fn read_block(&mut self) -> Result<bool> {
+    pub fn read_block(&mut self) -> Result<Option<BlockHeader>> {
         let mut iheader_buf = [0u8; size_of::<IndexHeader>()];
         let mut diff_buf = [0u8; size_of::<BlockHeader>() - size_of::<IndexHeader>()];
         let mut header_buf = [0u8; size_of::<BlockHeader>()];
@@ -1220,7 +1220,8 @@ impl<R: io::Read> Reader<R> {
             Ok(_) => {}
             Err(e) => {
                 if e.kind() == io::ErrorKind::UnexpectedEof {
-                    return Ok(false);
+                    // no more bytes, the stream is exhausted
+                    return Ok(None);
                 } else {
                     return Err(e.into());
                 }
@@ -1230,17 +1231,13 @@ impl<R: io::Read> Reader<R> {
         // The stream is exhausted, no more blocks to read
         if let Ok(iheader) = IndexHeader::from_bytes(&iheader_buf) {
             self.iheader = Some(iheader);
-            return Ok(false);
+            return Ok(None);
         } else {
             // attempt to read the rest of the block header
             match self.inner.read_exact(&mut diff_buf) {
                 Ok(_) => {}
                 Err(e) => {
-                    if e.kind() == io::ErrorKind::UnexpectedEof {
-                        return Ok(false);
-                    } else {
-                        return Err(e.into());
-                    }
+                    return Err(e.into());
                 }
             }
             header_buf[..iheader_buf.len()].copy_from_slice(&iheader_buf);
@@ -1250,7 +1247,7 @@ impl<R: io::Read> Reader<R> {
         let header = BlockHeader::from_bytes(&header_buf)?;
         self.block.read_from(&mut self.inner, header)?;
 
-        Ok(true)
+        Ok(Some(header))
     }
 
     pub fn read_index(&mut self) -> Result<Option<Index>> {
@@ -1445,10 +1442,18 @@ fn write_file(ipath: &str, opath: &str) -> Result<()> {
 fn read_file(ipath: &str) -> Result<()> {
     let rhandle = fs::File::open(ipath).map(io::BufReader::new)?;
     let mut reader = Reader::new(rhandle)?;
+    let mut writer = io::BufWriter::new(io::stdout());
 
-    while reader.read_block()? {
+    let mut total_records = 0;
+    while let Some(header) = reader.read_block()? {
         reader.block.decompress_columns()?;
+        let range = BlockRange::new(0, total_records + header.num_records);
+        for record in reader.block.iter_records(range) {
+            write_fastq(&mut writer, record.sheader(), record.sseq(), record.squal())?;
+        }
+        total_records += header.num_records;
     }
+
     reader.read_index()?;
     Ok(())
 }
