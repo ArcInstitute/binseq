@@ -32,8 +32,6 @@ struct ColumnarBlock {
     z_headers: Vec<u8>,
     z_qual: Vec<u8>,
 
-    /// Length of the encoded sequence
-    ebuf_len: usize,
     /// Number of records in the block
     num_records: usize,
     /// Total nucleotides in this block
@@ -152,10 +150,16 @@ impl ColumnarBlock {
         Ok(())
     }
 
+    /// Returns the expected length of the encoded sequence buffer
+    ///
+    /// This is deterministically calculated based on the sequence length and the encoding scheme.
+    fn ebuf_len(&self) -> usize {
+        self.nuclen.div_ceil(32)
+    }
+
     /// Encode the sequence into a compressed representation
     fn encode_sequence(&mut self) -> Result<()> {
         bitnuc::twobit::encode_with_invalid(&self.seq, &mut self.ebuf)?;
-        self.ebuf_len = self.ebuf.len();
         Ok(())
     }
 
@@ -233,7 +237,7 @@ impl ColumnarBlock {
 
         // decompress sequence
         {
-            self.ebuf.resize(self.ebuf_len, 0);
+            self.ebuf.resize(self.ebuf_len(), 0);
             copy_decode(self.z_seq.as_slice(), cast_slice_mut(&mut self.ebuf))?;
 
             self.seq.resize(self.nuclen, 0);
@@ -305,7 +309,6 @@ impl ColumnarBlock {
         self.nuclen = header.nuclen as usize;
         self.num_records = header.num_records as usize;
         self.num_npos = header.num_npos as usize;
-        self.ebuf_len = header.ebuf_len as usize;
 
         extension_read(reader, &mut self.z_seq_len, header.len_z_seq_len as usize)?;
         extension_read(
@@ -377,9 +380,6 @@ struct BlockHeader {
     // full decoded length of the sequence block
     nuclen: u64,
 
-    // length of the encoded sequence
-    ebuf_len: u64,
-
     // number of npos positions
     num_npos: u64,
 
@@ -402,7 +402,6 @@ impl BlockHeader {
             nuclen: block.nuclen as u64,
             num_npos: block.num_npos as u64,
             num_records: block.num_records as u64,
-            ebuf_len: block.ebuf.len() as u64,
         }
     }
 
