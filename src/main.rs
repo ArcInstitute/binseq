@@ -615,7 +615,7 @@ impl Index {
         let mut ranges = Vec::default();
         for block_header in block_headers {
             let range = BlockRange::new(offset, cumulative_records + block_header.num_records);
-            offset += block_header.block_len() as u64;
+            offset += (size_of::<BlockHeader>() + block_header.block_len()) as u64;
             cumulative_records += block_header.num_records;
             ranges.push(range);
         }
