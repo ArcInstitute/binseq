@@ -5,9 +5,13 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-bitnuc = "0.3.2"
+bitnuc = { git = "https://github.com/noamteyssier/bitnuc", branch = "allow-invalid-nucleotides" }
 bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 clap = { version = "4.5.53", features = ["derive"] }
+memchr = "2.7.6"
 paraseq = "0.4.7"
 parking_lot = "0.12.5"
 zstd = "0.13.3"
+
+[profile.release]
+debug = true

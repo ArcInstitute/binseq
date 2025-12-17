@@ -20,6 +20,8 @@ struct ColumnarBlock<W: io::Write> {
     l_seq: Vec<u64>,
     /// Length of headers for each record
     l_headers: Vec<u64>,
+    /// Position of all N's in the sequence
+    npos: Vec<u64>,
 
     /// Reusable buffer for encoding sequences
     ebuf: Vec<u64>,
@@ -27,6 +29,7 @@ struct ColumnarBlock<W: io::Write> {
     /// Reusable zstd compression buffer for columnar data
     z_seq_len: Vec<u8>,
     z_header_len: Vec<u8>,
+    z_npos: Vec<u8>,
     z_seq: Vec<u8>,
     z_flags: Vec<u8>,
     z_headers: Vec<u8>,
@@ -57,16 +60,20 @@ impl<W: io::Write> ColumnarBlock<W> {
             l_seq: Vec::default(),
             l_headers: Vec::default(),
 
+            // Position of all N's in the sequence
+            npos: Vec::default(),
+
             // encoding buffer
             ebuf: Vec::default(),
 
             // compression buffers
+            z_seq_len: Vec::default(),
+            z_header_len: Vec::default(),
+            z_npos: Vec::default(),
             z_seq: Vec::default(),
             z_flags: Vec::default(),
             z_headers: Vec::default(),
             z_qual: Vec::default(),
-            z_seq_len: Vec::default(),
-            z_header_len: Vec::default(),
         }
     }
 
@@ -86,17 +93,19 @@ impl<W: io::Write> ColumnarBlock<W> {
             self.flags.clear();
             self.headers.clear();
             self.qual.clear();
+            self.npos.clear();
         }
 
         // clear encodings
         {
             self.ebuf.clear();
+            self.z_seq_len.clear();
+            self.z_header_len.clear();
+            self.z_npos.clear();
             self.z_seq.clear();
             self.z_flags.clear();
             self.z_headers.clear();
             self.z_qual.clear();
-            self.z_seq_len.clear();
-            self.z_header_len.clear();
         }
     }
 
@@ -151,8 +160,13 @@ impl<W: io::Write> ColumnarBlock<W> {
     }
 
     fn encode_sequence(&mut self) -> Result<()> {
-        bitnuc::twobit::encode(&self.seq, &mut self.ebuf)?;
+        bitnuc::twobit::encode_with_invalid(&self.seq, &mut self.ebuf)?;
         Ok(())
+    }
+
+    fn fill_npos(&mut self) {
+        self.npos
+            .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64))
     }
 
     fn compress_columns(&mut self) -> Result<()> {
@@ -161,6 +175,11 @@ impl<W: io::Write> ColumnarBlock<W> {
 
         if self.headers.len() > 0 {
             copy_encode(cast_slice(&self.l_headers), &mut self.z_header_len, 0)?;
+        }
+
+        // compress npos
+        if self.npos.len() > 0 {
+            copy_encode(cast_slice(&self.npos), &mut self.z_npos, 0)?;
         }
 
         // compress sequence
@@ -185,20 +204,22 @@ impl<W: io::Write> ColumnarBlock<W> {
     }
 
     fn write_to_inner(&mut self) -> Result<()> {
-        // write all compressed buffers
         self.inner.write_all(&self.z_seq_len)?;
         self.inner.write_all(&self.z_header_len)?;
+        self.inner.write_all(&self.z_npos)?;
         self.inner.write_all(&self.z_seq)?;
         self.inner.write_all(&self.z_flags)?;
         self.inner.write_all(&self.z_headers)?;
         self.inner.write_all(&self.z_qual)?;
-
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
         // encode all sequences at once
         self.encode_sequence()?;
+
+        // fill npos
+        self.fill_npos();
 
         // compress each column
         self.compress_columns()?;
@@ -230,6 +251,7 @@ struct BlockHeader {
     // length of compressed columns
     len_z_seq_len: u64,
     len_z_header_len: u64,
+    len_z_npos: u64,
     len_z_seq: u64,
     len_z_flags: u64,
     len_z_headers: u64,
@@ -246,12 +268,26 @@ impl BlockHeader {
             padding: [42; 4],
             len_z_seq_len: writer.z_seq_len.len() as u64,
             len_z_header_len: writer.z_header_len.len() as u64,
+            len_z_npos: writer.z_npos.len() as u64,
             len_z_seq: writer.z_seq.len() as u64,
             len_z_flags: writer.z_flags.len() as u64,
             len_z_headers: writer.z_headers.len() as u64,
             len_z_qual: writer.z_qual.len() as u64,
             nuclen: writer.nuclen as u64,
         }
+    }
+
+    /// Calculate the length of the block in bytes.
+    #[allow(dead_code)]
+    pub fn block_len(&self) -> usize {
+        (self.len_z_seq_len
+            + self.len_z_header_len
+            + self.len_z_npos
+            + self.len_z_seq
+            + self.len_z_flags
+            + self.len_z_headers
+            + self.len_z_qual
+            + self.nuclen) as usize
     }
 
     pub fn as_bytes(&self) -> &[u8] {
