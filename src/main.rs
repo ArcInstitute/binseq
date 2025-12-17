@@ -5,8 +5,105 @@ use bytemuck::{Pod, Zeroable, cast_slice, checked::cast_slice_mut};
 use paraseq::{Record, fastx};
 use zstd::stream::{copy_decode, copy_encode};
 
+pub const FILE_MAGIC: &[u8; 7] = b"CBQFILE";
 pub const BLOCK_MAGIC: &[u8; 3] = b"BLK";
 pub const INDEX_MAGIC: &[u8; 8] = b"CBQINDEX";
+
+pub const FILE_VERSION: u8 = 1;
+pub const DEFAULT_BLOCK_SIZE: u64 = 1024 * 1024;
+pub const DEFAULT_COMPRESSION_LEVEL: u64 = 0;
+
+/// Records are paired
+pub const PRESENCE_PAIRED: u64 = 1 << 0;
+
+/// Records have quality scores
+pub const PRESENCE_QUALITIES: u64 = 1 << 1;
+
+/// Records have headers
+pub const PRESENCE_HEADERS: u64 = 1 << 2;
+
+/// Records have flags
+pub const PRESENCE_FLAGS: u64 = 1 << 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod)]
+#[repr(C)]
+pub struct FileHeader {
+    // File Type Metadata (8 bytes)
+    /// File magic number
+    magic: [u8; 7],
+    /// File version number
+    version: u8,
+
+    // Data presence flags (8 bytes)
+    /// A bitfield indicating which data fields are present in the file
+    presence_flags: u64,
+
+    // Configuration (16 bytes)
+    /// compression level
+    compression_level: u64,
+    /// block size in bytes
+    block_size: u64,
+
+    /// Reserved for future use
+    reserved: [u8; 32],
+}
+impl Default for FileHeader {
+    fn default() -> Self {
+        let mut header = Self {
+            magic: *FILE_MAGIC,
+            version: FILE_VERSION,
+            presence_flags: 0,
+            compression_level: DEFAULT_COMPRESSION_LEVEL,
+            block_size: DEFAULT_BLOCK_SIZE,
+            reserved: [0; 32],
+        };
+        header.set_headers();
+        header.set_qualities();
+        header
+    }
+}
+
+/// Flag getters and setters
+impl FileHeader {
+    pub fn set_paired(&mut self) {
+        self.presence_flags |= PRESENCE_PAIRED;
+    }
+    pub fn set_qualities(&mut self) {
+        self.presence_flags |= PRESENCE_QUALITIES;
+    }
+    pub fn set_headers(&mut self) {
+        self.presence_flags |= PRESENCE_HEADERS;
+    }
+    pub fn set_flags(&mut self) {
+        self.presence_flags |= PRESENCE_FLAGS;
+    }
+    pub fn is_paired(&self) -> bool {
+        self.presence_flags & PRESENCE_PAIRED != 0
+    }
+    pub fn has_qualities(&self) -> bool {
+        self.presence_flags & PRESENCE_QUALITIES != 0
+    }
+    pub fn has_headers(&self) -> bool {
+        self.presence_flags & PRESENCE_HEADERS != 0
+    }
+    pub fn has_flags(&self) -> bool {
+        self.presence_flags & PRESENCE_FLAGS != 0
+    }
+}
+
+impl FileHeader {
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let header: Self = *bytemuck::from_bytes(bytes);
+        if header.magic != *FILE_MAGIC {
+            bail!("Invalid file magic")
+        }
+        Ok(header)
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct ColumnarBlock {
@@ -45,12 +142,15 @@ pub struct ColumnarBlock {
     current_size: usize,
     /// Maximum size of this block (virtual)
     block_size: usize,
+    /// Compression level for zstd
+    compression_level: i32,
 }
 impl ColumnarBlock {
     /// Create a new columnar block with the given block size
-    pub fn new(block_size: usize) -> Self {
+    pub fn new(header: FileHeader) -> Self {
         Self {
-            block_size,
+            block_size: header.block_size as usize,
+            compression_level: header.compression_level as i32,
             ..Default::default()
         }
     }
@@ -187,33 +287,61 @@ impl ColumnarBlock {
     /// Compress all native columns into compressed representation
     fn compress_columns(&mut self) -> Result<()> {
         // compress sequence lengths
-        copy_encode(cast_slice(&self.l_seq), &mut self.z_seq_len, 0)?;
+        copy_encode(
+            cast_slice(&self.l_seq),
+            &mut self.z_seq_len,
+            self.compression_level,
+        )?;
 
         if self.headers.len() > 0 {
-            copy_encode(cast_slice(&self.l_headers), &mut self.z_header_len, 0)?;
+            copy_encode(
+                cast_slice(&self.l_headers),
+                &mut self.z_header_len,
+                self.compression_level,
+            )?;
         }
 
         // compress npos
         if self.npos.len() > 0 {
-            copy_encode(cast_slice(&self.npos), &mut self.z_npos, 0)?;
+            copy_encode(
+                cast_slice(&self.npos),
+                &mut self.z_npos,
+                self.compression_level,
+            )?;
         }
 
         // compress sequence
-        copy_encode(cast_slice(&self.ebuf), &mut self.z_seq, 0)?;
+        copy_encode(
+            cast_slice(&self.ebuf),
+            &mut self.z_seq,
+            self.compression_level,
+        )?;
 
         // compress flags
         if self.flags.len() > 0 {
-            copy_encode(cast_slice(&self.flags), &mut self.z_flags, 0)?;
+            copy_encode(
+                cast_slice(&self.flags),
+                &mut self.z_flags,
+                self.compression_level,
+            )?;
         }
 
         // compress headers
         if self.headers.len() > 0 {
-            copy_encode(cast_slice(&self.headers), &mut self.z_headers, 0)?;
+            copy_encode(
+                cast_slice(&self.headers),
+                &mut self.z_headers,
+                self.compression_level,
+            )?;
         }
 
         // compress quality
         if self.qual.len() > 0 {
-            copy_encode(cast_slice(&self.qual), &mut self.z_qual, 0)?;
+            copy_encode(
+                cast_slice(&self.qual),
+                &mut self.z_qual,
+                self.compression_level,
+            )?;
         }
 
         Ok(())
@@ -347,6 +475,10 @@ struct ColumnarBlockWriter<W: io::Write> {
     /// Internal writer for the block
     inner: W,
 
+    /// The CBQ file header
+    #[allow(dead_code)]
+    header: FileHeader,
+
     /// A reusable block for this writer
     block: ColumnarBlock,
 
@@ -354,12 +486,19 @@ struct ColumnarBlockWriter<W: io::Write> {
     offsets: Vec<BlockHeader>,
 }
 impl<W: io::Write> ColumnarBlockWriter<W> {
-    pub fn new(inner: W, block_size: usize) -> Self {
-        Self {
+    pub fn new(inner: W, header: FileHeader) -> Result<Self> {
+        // Build the writer
+        let mut writer = Self {
             inner,
-            block: ColumnarBlock::new(block_size),
+            header,
+            block: ColumnarBlock::new(header),
             offsets: Vec::default(),
-        }
+        };
+
+        // Ensure the header is written to the file
+        writer.inner.write_all(header.as_bytes())?;
+
+        Ok(writer)
     }
 
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
@@ -471,7 +610,7 @@ pub struct Index {
 impl Index {
     /// Builds the index from a list of block headers
     pub fn from_block_headers(block_headers: &[BlockHeader]) -> Self {
-        let mut offset = 0;
+        let mut offset = size_of::<FileHeader>() as u64;
         let mut cumulative_records = 0;
         let mut ranges = Vec::default();
         for block_header in block_headers {
@@ -653,12 +792,16 @@ pub struct Reader<R: io::Read> {
     iheader: Option<IndexHeader>,
 }
 impl<R: io::Read> Reader<R> {
-    pub fn new(inner: R) -> Self {
-        Self {
+    pub fn new(mut inner: R) -> Result<Self> {
+        let mut header_buf = [0u8; size_of::<FileHeader>()];
+        inner.read_exact(&mut header_buf)?;
+        let header = FileHeader::from_bytes(&header_buf)?;
+
+        Ok(Self {
             inner,
-            block: ColumnarBlock::new(0),
+            block: ColumnarBlock::new(header),
             iheader: None,
-        }
+        })
     }
 
     pub fn read_block(&mut self) -> Result<bool> {
@@ -730,7 +873,8 @@ impl<R: io::Read> Reader<R> {
 
 fn write_file(ipath: &str, opath: &str) -> Result<()> {
     let handle = io::BufWriter::new(fs::File::create(opath)?);
-    let mut writer = ColumnarBlockWriter::new(handle, 1024 * 1024);
+    let header = FileHeader::default();
+    let mut writer = ColumnarBlockWriter::new(handle, header)?;
 
     let mut reader = fastx::Reader::from_path(ipath)?;
     let mut rset = reader.new_record_set();
@@ -757,7 +901,7 @@ fn write_file(ipath: &str, opath: &str) -> Result<()> {
 
 fn read_file(ipath: &str) -> Result<()> {
     let rhandle = fs::File::open(ipath).map(io::BufReader::new)?;
-    let mut reader = Reader::new(rhandle);
+    let mut reader = Reader::new(rhandle)?;
 
     while reader.read_block()? {
         reader.block.decompress_columns()?;
