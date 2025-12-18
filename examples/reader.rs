@@ -103,6 +103,6 @@ fn main() -> Result<()> {
     let handle = match_output(args.output.as_deref())?;
     let proc = Processor::new(handle);
     reader.process_parallel(proc.clone(), 0)?;
-    println!("Number of records: {}", proc.n_records());
+    eprintln!("Number of records: {}", proc.n_records());
     Ok(())
 }
