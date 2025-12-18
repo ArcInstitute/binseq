@@ -94,3 +94,86 @@ impl FileHeader {
         Ok(header)
     }
 }
+
+#[derive(Default)]
+pub struct FileHeaderBuilder {
+    compression_level: Option<usize>,
+    block_size: Option<usize>,
+    is_paired: Option<bool>,
+    with_headers: Option<bool>,
+    with_flags: Option<bool>,
+    with_qualities: Option<bool>,
+}
+
+impl FileHeaderBuilder {
+    pub fn with_compression_level(&mut self, compression_level: usize) -> &mut Self {
+        self.compression_level = Some(compression_level);
+        self
+    }
+
+    pub fn with_block_size(&mut self, block_size: usize) -> &mut Self {
+        self.block_size = Some(block_size);
+        self
+    }
+
+    pub fn is_paired(&mut self, is_paired: bool) -> &mut Self {
+        self.is_paired = Some(is_paired);
+        self
+    }
+
+    pub fn with_flags(&mut self, with_flags: bool) -> &mut Self {
+        self.with_flags = Some(with_flags);
+        self
+    }
+
+    pub fn with_headers(&mut self, with_headers: bool) -> &mut Self {
+        self.with_headers = Some(with_headers);
+        self
+    }
+
+    pub fn with_qualities(&mut self, with_qualities: bool) -> &mut Self {
+        self.with_qualities = Some(with_qualities);
+        self
+    }
+
+    pub fn build(&self) -> FileHeader {
+        let mut header = FileHeader {
+            magic: *FILE_MAGIC,
+            version: FILE_VERSION,
+            compression_level: self
+                .compression_level
+                .map_or(DEFAULT_COMPRESSION_LEVEL, |level| level as u64),
+            block_size: self
+                .block_size
+                .map_or(DEFAULT_BLOCK_SIZE, |size| size as u64),
+            presence_flags: 0,
+            reserved: [0; 32],
+        };
+
+        // default to unpaired
+        match self.is_paired {
+            Some(true) => header.set_paired(),
+            _ => {}
+        }
+
+        // default to using headers
+        match self.with_headers {
+            Some(false) => {}
+            _ => header.set_headers(),
+        };
+
+        // default to not using flags
+        match self.with_flags {
+            Some(true) => header.set_flags(),
+            _ => {}
+        };
+
+        // default to using qualities
+        match self.with_qualities {
+            Some(false) => {}
+            _ => header.set_qualities(),
+        };
+
+        header
+    }
+}

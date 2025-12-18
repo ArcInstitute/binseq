@@ -2,7 +2,10 @@ mod core;
 mod read;
 mod write;
 
-pub use core::{BlockHeader, BlockRange, FileHeader, SequencingRecord, SequencingRecordBuilder};
+pub use core::{
+    BlockHeader, BlockRange, FileHeader, FileHeaderBuilder, SequencingRecord,
+    SequencingRecordBuilder,
+};
 pub use read::{MmapReader, Reader};
 pub use write::ColumnarBlockWriter;
 

@@ -7,7 +7,7 @@ pub(crate) mod utils;
 
 pub use block::ColumnarBlock;
 pub use block_header::BlockHeader;
-pub use header::FileHeader;
+pub use header::{FileHeader, FileHeaderBuilder};
 pub use index::{BlockRange, Index, IndexFooter, IndexHeader};
 pub use sequencing_record::{SequencingRecord, SequencingRecordBuilder};
 

@@ -1,7 +1,7 @@
 use std::{fs, io, sync::Arc};
 
 use anyhow::Result;
-use cbq::{ColumnarBlockWriter, FileHeader, SequencingRecordBuilder};
+use cbq::{ColumnarBlockWriter, FileHeader, FileHeaderBuilder, SequencingRecordBuilder};
 use clap::Parser;
 use paraseq::{
     Record, fastx,
@@ -106,10 +106,9 @@ pub fn main() -> Result<()> {
     let args = Args::parse();
 
     let handle = Box::new(fs::File::create(&args.output).map(io::BufWriter::new)?);
-    let mut header = FileHeader::default();
-    if args.input.len() == 2 {
-        header.set_paired();
-    }
+    let header = FileHeaderBuilder::default()
+        .is_paired(args.input.len() == 2)
+        .build();
     let mut proc = ParallelWriter::new(handle, header)?;
 
     if args.input.len() == 2 {
