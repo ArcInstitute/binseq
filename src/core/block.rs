@@ -110,7 +110,7 @@ impl ColumnarBlock {
 
     fn add_sequence(&mut self, record: &SequencingRecord) {
         self.l_seq.push(record.s_seq.len() as u64);
-        self.seq.extend_from_slice(&record.s_seq);
+        self.seq.extend_from_slice(record.s_seq);
         if let Some(x_seq) = record.x_seq {
             self.l_seq.push(x_seq.len() as u64);
             self.seq.extend_from_slice(x_seq);
@@ -121,7 +121,9 @@ impl ColumnarBlock {
     }
 
     fn add_flag(&mut self, record: &SequencingRecord) {
-        record.flag.map(|flag| self.flags.push(flag));
+        if let Some(flag) = record.flag {
+            self.flags.push(flag)
+        }
     }
 
     fn add_headers(&mut self, record: &SequencingRecord) {
@@ -160,7 +162,7 @@ impl ColumnarBlock {
 
     /// Ensure that the record can be pushed into the block
     fn validate_record(&self, record: &SequencingRecord) -> Result<()> {
-        if !self.can_fit(&record) {
+        if !self.can_fit(record) {
             bail!("Block is full")
         }
 
@@ -233,7 +235,7 @@ impl ColumnarBlock {
     fn fill_npos(&mut self) {
         self.npos
             .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64));
-        self.num_npos = self.npos.len() as usize;
+        self.num_npos = self.npos.len();
     }
 
     /// Convert all ambiguous bases back to N
@@ -254,7 +256,7 @@ impl ColumnarBlock {
             cctx,
         )?;
 
-        if self.headers.len() > 0 {
+        if !self.headers.is_empty() {
             sized_compress(
                 &mut self.z_header_len,
                 cast_slice(&self.l_headers),
@@ -264,7 +266,7 @@ impl ColumnarBlock {
         }
 
         // compress npos
-        if self.npos.len() > 0 {
+        if !self.npos.is_empty() {
             sized_compress(
                 &mut self.z_npos,
                 cast_slice(&self.npos),
@@ -282,7 +284,7 @@ impl ColumnarBlock {
         )?;
 
         // compress flags
-        if self.flags.len() > 0 {
+        if !self.flags.is_empty() {
             sized_compress(
                 &mut self.z_flags,
                 cast_slice(&self.flags),
@@ -292,7 +294,7 @@ impl ColumnarBlock {
         }
 
         // compress headers
-        if self.headers.len() > 0 {
+        if !self.headers.is_empty() {
             sized_compress(
                 &mut self.z_headers,
                 cast_slice(&self.headers),
@@ -302,7 +304,7 @@ impl ColumnarBlock {
         }
 
         // compress quality
-        if self.qual.len() > 0 {
+        if !self.qual.is_empty() {
             sized_compress(
                 &mut self.z_qual,
                 cast_slice(&self.qual),
@@ -323,7 +325,7 @@ impl ColumnarBlock {
         }
 
         // decompress header lengths
-        if self.z_header_len.len() > 0 {
+        if !self.z_header_len.is_empty() {
             self.l_headers.resize(self.num_records, 0);
             copy_decode(
                 self.z_header_len.as_slice(),
@@ -332,7 +334,7 @@ impl ColumnarBlock {
         }
 
         // decompress npos
-        if self.z_npos.len() > 0 {
+        if !self.z_npos.is_empty() {
             self.npos.resize(self.num_npos, 0);
             copy_decode(self.z_npos.as_slice(), cast_slice_mut(&mut self.npos))?;
         }
@@ -347,18 +349,18 @@ impl ColumnarBlock {
         }
 
         // decompress flags
-        if self.z_flags.len() > 0 {
+        if !self.z_flags.is_empty() {
             self.flags.resize(self.num_records, 0);
             copy_decode(self.z_flags.as_slice(), cast_slice_mut(&mut self.flags))?;
         }
 
         // decompress headers
-        if self.z_headers.len() > 0 {
+        if !self.z_headers.is_empty() {
             copy_decode(self.z_headers.as_slice(), &mut self.headers)?;
         }
 
         // decompress quality scores
-        if self.z_qual.len() > 0 {
+        if !self.z_qual.is_empty() {
             copy_decode(self.z_qual.as_slice(), &mut self.qual)?;
         }
 
@@ -401,7 +403,7 @@ impl ColumnarBlock {
         self.compress_columns(cctx)?;
 
         // build the block header
-        let header = BlockHeader::from_block(&self);
+        let header = BlockHeader::from_block(self);
         // eprintln!("{header:?}");
 
         // write the block header

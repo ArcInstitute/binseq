@@ -165,7 +165,7 @@ impl MmapReader {
         let data_end = header_end + block_header.block_len();
         let block_data_slice = &self.inner[header_end..data_end];
         self.block
-            .decompress_from_bytes(&block_data_slice, block_header, &mut self.dctx)?;
+            .decompress_from_bytes(block_data_slice, block_header, &mut self.dctx)?;
         Ok(())
     }
 }

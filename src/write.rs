@@ -71,11 +71,9 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.block
-            .flush_to(&mut self.inner, &mut self.cctx)?
-            .map(|header| {
-                self.headers.push(header);
-            });
+        if let Some(header) = self.block.flush_to(&mut self.inner, &mut self.cctx)? {
+            self.headers.push(header);
+        }
         Ok(())
     }
 
@@ -102,7 +100,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
 
     pub fn ingest(&mut self, other: &mut ColumnarBlockWriter<Vec<u8>>) -> Result<()> {
         // Write all completed blocks from the other
-        self.inner.write_all(&other.inner_data())?;
+        self.inner.write_all(other.inner_data())?;
         // eprintln!(
         //     "Wrote {} bytes from completed blocks",
         //     other.inner_data().len()

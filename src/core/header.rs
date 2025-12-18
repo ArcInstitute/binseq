@@ -174,9 +174,8 @@ impl FileHeaderBuilder {
         };
 
         // default to unpaired
-        match self.is_paired {
-            Some(true) => header.set_paired(),
-            _ => {}
+        if let Some(true) = self.is_paired {
+            header.set_paired()
         }
 
         // default to using headers
@@ -186,9 +185,8 @@ impl FileHeaderBuilder {
         };
 
         // default to not using flags
-        match self.with_flags {
-            Some(true) => header.set_flags(),
-            _ => {}
+        if let Some(true) = self.with_flags {
+            header.set_flags()
         };
 
         // default to using qualities
