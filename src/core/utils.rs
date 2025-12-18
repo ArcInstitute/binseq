@@ -52,6 +52,7 @@ pub(crate) fn slice_and_increment<'a>(offset: &mut usize, len: u64, bytes: &'a [
 /// are initialized before reading them. This is safe when immediately followed
 /// by operations that write to the entire buffer (e.g., decompression).
 #[inline]
+#[allow(clippy::uninit_vec)]
 pub(crate) fn resize_uninit<T>(vec: &mut Vec<T>, new_len: usize) {
     match new_len.cmp(&vec.len()) {
         std::cmp::Ordering::Greater => {

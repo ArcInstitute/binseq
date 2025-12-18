@@ -241,7 +241,9 @@ impl ColumnarBlock {
     /// Convert all ambiguous bases back to N
     fn backfill_npos(&mut self) {
         self.npos.iter().for_each(|idx| {
-            self.seq.get_mut(*idx as usize).map(|base| *base = b'N');
+            if let Some(base) = self.seq.get_mut(*idx as usize) {
+                *base = b'N';
+            }
         });
     }
 
