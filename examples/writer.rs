@@ -78,6 +78,19 @@ impl<R: Record> PairedParallelProcessor<R> for ParallelWriter {
         self.local_num_records += 1;
         Ok(())
     }
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        {
+            let mut writer = self.writer.lock();
+            writer.ingest(&mut self.local_writer)?;
+        }
+
+        {
+            *self.num_records.lock() += self.local_num_records;
+            self.local_num_records = 0;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Parser)]
@@ -98,7 +111,10 @@ pub fn main() -> Result<()> {
     let args = Args::parse();
 
     let handle = Box::new(fs::File::create(&args.output).map(io::BufWriter::new)?);
-    let header = FileHeader::default();
+    let mut header = FileHeader::default();
+    if args.input.len() == 2 {
+        header.set_paired();
+    }
     let mut proc = ParallelWriter::new(handle, header)?;
 
     if args.input.len() == 2 {
