@@ -47,6 +47,10 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         Ok(writer)
     }
 
+    pub fn header(&self) -> FileHeader {
+        self.block.header
+    }
+
     /// Calculate the usage of the block as a percentage
     pub fn usage(&self) -> f64 {
         self.block.usage()

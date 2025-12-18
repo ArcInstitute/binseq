@@ -587,6 +587,7 @@ impl ColumnarBlock {
             index: 0,
             is_paired: self.header.is_paired(),
             has_headers: self.header.has_headers(),
+            header_buffer: itoa::Buffer::new(),
         }
     }
 }
@@ -597,6 +598,7 @@ pub struct RefRecordIter<'a> {
     index: usize,
     is_paired: bool,
     has_headers: bool,
+    header_buffer: itoa::Buffer,
 }
 impl<'a> Iterator for RefRecordIter<'a> {
     type Item = RefRecord<'a>;
@@ -634,14 +636,20 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 None
             };
 
+            let global_index =
+                self.range.cumulative_records as usize - (self.block.num_records + self.index);
+
+            let rr_index = RefRecordIndex::new(global_index, &mut self.header_buffer);
+
             let record = RefRecord {
                 block: self.block,
-                range: self.range,
                 index: self.index,
+                global_index,
                 sseq_span,
                 sheader_span,
                 xseq_span,
                 xheader_span,
+                rr_index,
             };
 
             self.index += 1 + self.is_paired as usize;
@@ -651,15 +659,37 @@ impl<'a> Iterator for RefRecordIter<'a> {
 }
 
 #[derive(Clone, Copy)]
+struct RefRecordIndex {
+    index_buf: [u8; 20],
+    index_len: usize,
+}
+impl RefRecordIndex {
+    fn new(index: usize, itoa_buf: &mut itoa::Buffer) -> Self {
+        let mut index_buf = [0u8; 20];
+        let header_str = itoa_buf.format(index);
+        let index_len = header_str.len();
+        index_buf[..index_len].copy_from_slice(header_str.as_bytes());
+        Self {
+            index_buf,
+            index_len,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.index_buf[..self.index_len]
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct RefRecord<'a> {
     /// A reference to the block containing this record
     block: &'a ColumnarBlock,
 
-    /// The block range
-    range: BlockRange,
-
     /// Local index of this record within the block
     index: usize,
+
+    /// Global index of this record in the file
+    global_index: usize,
 
     /// Span of the primary sequence within the block
     sseq_span: Span,
@@ -672,6 +702,9 @@ pub struct RefRecord<'a> {
 
     /// Span of the extended header within the block
     xheader_span: Option<Span>,
+
+    /// A buffer to the name of this record when not storing headers
+    rr_index: RefRecordIndex,
 }
 impl<'a> BinseqRecord for RefRecord<'a> {
     fn bitsize(&self) -> BitSize {
@@ -679,7 +712,7 @@ impl<'a> BinseqRecord for RefRecord<'a> {
     }
 
     fn index(&self) -> u64 {
-        self.range.cumulative_records - (self.block.num_records + self.index) as u64
+        self.global_index as u64
     }
 
     fn flag(&self) -> Option<u64> {
@@ -694,7 +727,7 @@ impl<'a> BinseqRecord for RefRecord<'a> {
         if let Some(span) = self.sheader_span {
             &self.block.headers[span.range()]
         } else {
-            &[]
+            self.rr_index.as_bytes()
         }
     }
 
@@ -702,7 +735,7 @@ impl<'a> BinseqRecord for RefRecord<'a> {
         if let Some(span) = self.xheader_span {
             &self.block.headers[span.range()]
         } else {
-            &[]
+            self.rr_index.as_bytes()
         }
     }
 
