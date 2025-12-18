@@ -29,6 +29,21 @@ impl ParallelWriter {
             num_records: Arc::new(Mutex::new(0)),
         })
     }
+
+    fn batch_complete(&mut self) -> paraseq::Result<()> {
+        {
+            let mut writer = self.writer.lock();
+            writer.ingest(&mut self.local_writer)?;
+        }
+
+        {
+            *self.num_records.lock() += self.local_num_records;
+            self.local_num_records = 0;
+        }
+
+        Ok(())
+    }
+
     pub fn finish(&mut self) -> Result<()> {
         let mut writer = self.writer.lock();
         writer.finish()?;
@@ -49,17 +64,7 @@ impl<R: Record> ParallelProcessor<R> for ParallelWriter {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        {
-            let mut writer = self.writer.lock();
-            writer.ingest(&mut self.local_writer)?;
-        }
-
-        {
-            *self.num_records.lock() += self.local_num_records;
-            self.local_num_records = 0;
-        }
-
-        Ok(())
+        self.batch_complete()
     }
 }
 impl<R: Record> PairedParallelProcessor<R> for ParallelWriter {
@@ -79,17 +84,7 @@ impl<R: Record> PairedParallelProcessor<R> for ParallelWriter {
         Ok(())
     }
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        {
-            let mut writer = self.writer.lock();
-            writer.ingest(&mut self.local_writer)?;
-        }
-
-        {
-            *self.num_records.lock() += self.local_num_records;
-            self.local_num_records = 0;
-        }
-
-        Ok(())
+        self.batch_complete()
     }
 }
 
