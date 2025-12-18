@@ -111,9 +111,6 @@ pub fn main() -> Result<()> {
         let reader = fastx::Reader::from_path(&args.input[0])?;
         reader.process_parallel(&mut proc, args.threads)?;
     }
-
-    let reader = fastx::Reader::from_path(args.input[0].clone())?;
-    reader.process_parallel(&mut proc, 0)?;
     proc.finish()?;
     Ok(())
 }
