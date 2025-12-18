@@ -9,7 +9,7 @@ pub use block::ColumnarBlock;
 pub use block_header::BlockHeader;
 pub use header::FileHeader;
 pub use index::{BlockRange, Index, IndexFooter, IndexHeader};
-pub use sequencing_record::SequencingRecord;
+pub use sequencing_record::{SequencingRecord, SequencingRecordBuilder};
 
 use super::{
     BLOCK_MAGIC, DEFAULT_BLOCK_SIZE, DEFAULT_COMPRESSION_LEVEL, FILE_MAGIC, FILE_VERSION,

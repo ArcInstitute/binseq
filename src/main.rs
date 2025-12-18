@@ -2,7 +2,7 @@ use std::{fs, io, sync::Arc};
 
 use anyhow::Result;
 use binseq::{BinseqRecord, ParallelProcessor, ParallelReader};
-use cbq::{BlockRange, ColumnarBlockWriter, FileHeader, MmapReader, SequencingRecord};
+use cbq::{BlockRange, ColumnarBlockWriter, FileHeader, MmapReader, SequencingRecordBuilder};
 use paraseq::{Record, fastx};
 use parking_lot::Mutex;
 
@@ -17,15 +17,11 @@ fn write_file(ipath: &str, opath: &str) -> Result<()> {
         for res in rset.iter() {
             let record = res?;
             let seq = record.seq();
-            let ref_record = SequencingRecord::new(
-                &seq,
-                record.qual(),
-                Some(record.id()),
-                None,
-                None,
-                None,
-                None,
-            );
+            let ref_record = SequencingRecordBuilder::default()
+                .s_seq(&seq)
+                .opt_s_qual(record.qual())
+                .s_header(record.id())
+                .build()?;
             writer.push(ref_record)?;
         }
     }
