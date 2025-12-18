@@ -14,8 +14,8 @@ pub struct ColumnarBlockWriter<W: io::Write> {
     /// A reusable block for this writer
     block: ColumnarBlock,
 
-    /// Offsets of the blocks written by this writer
-    offsets: Vec<BlockHeader>,
+    /// All block headers written by this writer
+    headers: Vec<BlockHeader>,
 
     /// Compression context for the thread
     cctx: zstd_safe::CCtx<'static>,
@@ -25,7 +25,7 @@ impl<W: io::Write + Clone> Clone for ColumnarBlockWriter<W> {
         Self {
             inner: self.inner.clone(),
             block: self.block.clone(),
-            offsets: self.offsets.clone(),
+            headers: self.headers.clone(),
             cctx: zstd_safe::CCtx::create(),
         }
     }
@@ -37,7 +37,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         let mut writer = Self {
             inner,
             block: ColumnarBlock::new(header),
-            offsets: Vec::default(),
+            headers: Vec::default(),
             cctx: zstd_safe::CCtx::create(),
         };
 
@@ -57,7 +57,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         Self {
             inner,
             block: ColumnarBlock::new(header),
-            offsets: Vec::default(),
+            headers: Vec::default(),
             cctx: zstd_safe::CCtx::create(),
         }
     }
@@ -74,7 +74,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         self.block
             .flush_to(&mut self.inner, &mut self.cctx)?
             .map(|header| {
-                self.offsets.push(header);
+                self.headers.push(header);
             });
         Ok(())
     }
@@ -86,7 +86,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
     }
 
     fn write_index(&mut self) -> Result<()> {
-        let index = Index::from_block_headers(&self.offsets);
+        let index = Index::from_block_headers(&self.headers);
         let z_index = index.encoded()?;
         let header = IndexHeader::new(index.size(), z_index.len() as u64);
         let footer = IndexFooter::new(z_index.len() as u64);
@@ -108,8 +108,8 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         //     other.inner_data().len()
         // );
 
-        // Take all offsets from the other
-        self.offsets.extend_from_slice(&other.offsets);
+        // Take all headers from the other
+        self.headers.extend_from_slice(&other.headers);
 
         // Attempt to ingest the incomplete block from the other
         if self.block.can_ingest(&other.block) {
@@ -139,7 +139,7 @@ impl ColumnarBlockWriter<Vec<u8>> {
 
     pub fn clear_inner_data(&mut self) {
         self.inner.clear();
-        self.offsets.clear();
+        self.headers.clear();
         self.block.clear();
     }
 
