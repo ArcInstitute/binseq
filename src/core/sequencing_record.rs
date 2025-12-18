@@ -11,6 +11,7 @@ pub struct SequencingRecord<'a> {
     pub(crate) flag: Option<u64>,
 }
 impl<'a> SequencingRecord<'a> {
+    #[inline]
     pub fn new(
         s_seq: &'a [u8],
         s_qual: Option<&'a [u8]>,
@@ -32,6 +33,7 @@ impl<'a> SequencingRecord<'a> {
     }
 
     /// Returns the size of the record in bytes
+    #[inline]
     pub fn size(&self) -> usize {
         self.s_seq.len()
             + self.s_qual.map_or(0, |q| q.len())
@@ -42,8 +44,21 @@ impl<'a> SequencingRecord<'a> {
             + self.flag.map_or(0, |f| f.to_le_bytes().len())
     }
 
+    #[inline]
     pub fn is_paired(&self) -> bool {
         self.x_seq.is_some()
+    }
+    #[inline]
+    pub fn has_flags(&self) -> bool {
+        self.flag.is_some()
+    }
+    #[inline]
+    pub fn has_headers(&self) -> bool {
+        self.s_header.is_some() || self.x_header.is_some()
+    }
+    #[inline]
+    pub fn has_qualities(&self) -> bool {
+        self.s_qual.is_some() || self.x_qual.is_some()
     }
 }
 

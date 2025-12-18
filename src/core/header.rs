@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable};
 
@@ -67,17 +69,38 @@ impl FileHeader {
     pub fn set_flags(&mut self) {
         self.presence_flags |= PRESENCE_FLAGS;
     }
+
+    #[inline]
     pub fn is_paired(&self) -> bool {
         self.presence_flags & PRESENCE_PAIRED != 0
     }
+    #[inline]
     pub fn has_qualities(&self) -> bool {
         self.presence_flags & PRESENCE_QUALITIES != 0
     }
+    #[inline]
     pub fn has_headers(&self) -> bool {
         self.presence_flags & PRESENCE_HEADERS != 0
     }
+    #[inline]
     pub fn has_flags(&self) -> bool {
         self.presence_flags & PRESENCE_FLAGS != 0
+    }
+}
+
+impl Display for FileHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CBQ {{ version: {}, paired: {}, qualities: {}, headers: {}, flags: {}, block_size: {}, compression: {} }}",
+            self.version,
+            self.is_paired(),
+            self.has_qualities(),
+            self.has_headers(),
+            self.has_flags(),
+            self.block_size,
+            self.compression_level,
+        )
     }
 }
 

@@ -106,21 +106,31 @@ pub fn main() -> Result<()> {
     let args = Args::parse();
 
     let handle = Box::new(fs::File::create(&args.output).map(io::BufWriter::new)?);
-    let header = FileHeaderBuilder::default()
-        .is_paired(args.input.len() == 2)
-        .build();
-    let mut proc = ParallelWriter::new(handle, header)?;
 
     if args.input.len() == 2 {
         eprintln!("Processing paired-end FASTX files");
         let r1 = fastx::Reader::from_path(&args.input[0])?;
         let r2 = fastx::Reader::from_path(&args.input[1])?;
+
+        let header = FileHeaderBuilder::default()
+            .is_paired(true)
+            .with_qualities(matches!(r1.format(), fastx::Format::Fastq))
+            .build();
+        let mut proc = ParallelWriter::new(handle, header)?;
+
         r1.process_parallel_paired(r2, &mut proc, args.threads)?;
+        proc.finish()?;
     } else {
         eprintln!("Processing single-end FASTX file");
         let reader = fastx::Reader::from_path(&args.input[0])?;
+
+        let header = FileHeaderBuilder::default()
+            .with_qualities(matches!(reader.format(), fastx::Format::Fastq))
+            .build();
+        let mut proc = ParallelWriter::new(handle, header)?;
+
         reader.process_parallel(&mut proc, args.threads)?;
+        proc.finish()?;
     }
-    proc.finish()?;
     Ok(())
 }

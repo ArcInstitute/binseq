@@ -158,15 +158,54 @@ impl ColumnarBlock {
         self.current_size + other.current_size <= self.header.block_size as usize
     }
 
-    pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
+    /// Ensure that the record can be pushed into the block
+    fn validate_record(&self, record: &SequencingRecord) -> Result<()> {
         if !self.can_fit(&record) {
             bail!("Block is full")
         }
+
+        if record.is_paired() != self.header.is_paired() {
+            bail!(
+                "Cannot push record (paired: {}) with block config (paired: {})",
+                record.is_paired(),
+                self.header.is_paired()
+            )
+        }
+
+        if record.has_flags() != self.header.has_flags() {
+            bail!(
+                "Cannot push record (flags: {}) with block config (flags: {})",
+                record.has_flags(),
+                self.header.has_flags()
+            )
+        }
+
+        if record.has_headers() != self.header.has_headers() {
+            bail!(
+                "Cannot push record (headers: {}) with block config (headers: {})",
+                record.has_headers(),
+                self.header.has_headers()
+            )
+        }
+
+        if record.has_qualities() != self.header.has_qualities() {
+            bail!(
+                "Cannot push record (qualities: {}) with block config (qualities: {})",
+                record.has_qualities(),
+                self.header.has_qualities()
+            )
+        }
+        Ok(())
+    }
+
+    pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
+        self.validate_record(&record)?;
 
         self.add_sequence(&record);
         self.add_flag(&record);
         self.add_headers(&record);
         self.add_quality(&record);
+
         if record.is_paired() {
             self.num_records += 2;
         } else {
