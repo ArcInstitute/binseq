@@ -1,0 +1,22 @@
+[package]
+name = "cbq"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+binseq = "0.8.3"
+bitnuc = { git = "https://github.com/noamteyssier/bitnuc", branch = "allow-invalid-nucleotides" }
+bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
+memchr = "2.7.6"
+memmap2 = "0.9.9"
+num_cpus = "1.17.0"
+parking_lot = "0.12.5"
+zstd = "0.13.3"
+
+[profile.release]
+debug = true
+
+[dev-dependencies]
+clap = { version = "4.5.53", features = ["derive"] }
+paraseq = "0.4.7"
