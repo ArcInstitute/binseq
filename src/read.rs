@@ -175,30 +175,64 @@ impl ParallelReader for MmapReader {
         processor: P,
         num_threads: usize,
     ) -> binseq::Result<()> {
+        let num_records = self.num_records();
+        self.process_parallel_range(processor, num_threads, 0..num_records)
+    }
+
+    fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
+        self,
+        processor: P,
+        num_threads: usize,
+        range: std::ops::Range<usize>,
+    ) -> binseq::Result<()> {
         let num_threads = if num_threads == 0 {
             num_cpus::get()
         } else {
             num_threads.min(num_cpus::get())
         };
 
-        let blocks_per_thread = self.index.num_blocks().div_ceil(num_threads);
+        // validate range
+        let total_records = self.num_records();
+        if range.start >= total_records || range.end > total_records || range.start > range.end {
+            return Ok(()); // nothing to do
+        }
+
+        let mut iv_start = 0;
+        let relevant_blocks = self
+            .index
+            .iter_blocks()
+            .filter(|block| {
+                let iv_end = block.cumulative_records as usize;
+                let relevant = iv_start <= range.end && iv_end > range.start;
+                iv_start = iv_end;
+                relevant
+            })
+            .collect::<Vec<_>>();
+        let num_blocks = relevant_blocks.len();
+
+        if relevant_blocks.is_empty() {
+            return Ok(()); // nothing to do
+        }
+
+        let blocks_per_thread = num_blocks.div_ceil(num_threads);
 
         let mut handles = Vec::new();
         for thread_id in 0..num_threads {
             let start_block_idx = thread_id * blocks_per_thread;
-            let end_block_idx = ((thread_id + 1) * blocks_per_thread).min(self.index.num_blocks());
+            let end_block_idx = ((thread_id + 1) * blocks_per_thread).min(num_blocks);
+
             let mut t_reader = self.clone();
             let mut t_proc = processor.clone();
 
-            let thread_handle = thread::spawn(move || -> binseq::Result<()> {
-                // Pull all block ranges for this thread
-                let t_block_ranges: Vec<_> = t_reader
-                    .index
-                    .iter_blocks()
-                    .skip(start_block_idx)
-                    .take(end_block_idx - start_block_idx)
-                    .collect();
+            // pull all block ranges for this thread
+            let t_block_ranges = relevant_blocks
+                .iter()
+                .skip(start_block_idx)
+                .take(end_block_idx - start_block_idx)
+                .copied()
+                .collect::<Vec<_>>();
 
+            let thread_handle = thread::spawn(move || -> binseq::Result<()> {
                 for range in t_block_ranges {
                     t_reader.load_block(range)?;
                     for record in t_reader.block.iter_records(range) {
@@ -206,7 +240,6 @@ impl ParallelReader for MmapReader {
                     }
                     t_proc.on_batch_complete()?;
                 }
-
                 Ok(())
             });
             handles.push(thread_handle);
@@ -216,14 +249,5 @@ impl ParallelReader for MmapReader {
             handle.join().unwrap()?;
         }
         Ok(())
-    }
-
-    fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
-        self,
-        _processor: P,
-        _num_threads: usize,
-        _range: std::ops::Range<usize>,
-    ) -> binseq::Result<()> {
-        unimplemented!()
     }
 }
