@@ -3,6 +3,7 @@ use std::{io, sync::Arc};
 use anyhow::Result;
 use binseq::prelude::*;
 use cbq::MmapReader;
+use clap::Parser;
 use parking_lot::Mutex;
 
 type BoxedWriter = Box<dyn io::Write + Send>;
@@ -74,12 +75,33 @@ fn write_fastq<W: io::Write>(writer: &mut W, header: &[u8], seq: &[u8], qual: &[
     Ok(())
 }
 
+#[derive(Parser)]
+struct Args {
+    #[clap(required = true)]
+    input: String,
+
+    #[clap(short, long)]
+    output: Option<String>,
+
+    #[clap(short = 'T', long, default_value_t = 0)]
+    threads: usize,
+}
+
+fn match_output(path: Option<&str>) -> Result<BoxedWriter> {
+    match path {
+        Some(path) => {
+            let handle = std::fs::File::create(path).map(io::BufWriter::new)?;
+            Ok(Box::new(handle))
+        }
+        None => Ok(Box::new(io::stdout())),
+    }
+}
+
 fn main() -> Result<()> {
-    let path = std::env::args()
-        .nth(1)
-        .expect("Usage: reader <input_path>.cbq");
-    let reader = MmapReader::new(path)?;
-    let proc = Processor::new(Box::new(io::stdout()));
+    let args = Args::parse();
+    let reader = MmapReader::new(&args.input)?;
+    let handle = match_output(args.output.as_deref())?;
+    let proc = Processor::new(handle);
     reader.process_parallel(proc.clone(), 0)?;
     println!("Number of records: {}", proc.n_records());
     Ok(())
