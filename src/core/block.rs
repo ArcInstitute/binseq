@@ -67,7 +67,7 @@ impl ColumnarBlock {
     }
 
     /// Clears the internal data structures
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         // clear index counters
         {
             self.nuclen = 0;
@@ -145,6 +145,10 @@ impl ColumnarBlock {
 
     pub(crate) fn can_fit(&self, record: &SequencingRecord<'_>) -> bool {
         self.current_size + record.size() <= self.header.block_size as usize
+    }
+
+    pub(crate) fn can_ingest(&self, other: &Self) -> bool {
+        self.current_size + other.current_size <= self.header.block_size as usize
     }
 
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
@@ -474,6 +478,39 @@ impl ColumnarBlock {
                 slice_and_increment(&mut byte_offset, header.len_z_qual, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn take_incomplete(&mut self, other: &Self) -> Result<()> {
+        if !self.can_ingest(other) {
+            bail!("Cannot fit the other block");
+        }
+
+        // increment attributes
+        {
+            self.nuclen += other.nuclen;
+            self.num_records += other.num_records;
+            self.current_size += other.current_size;
+        }
+
+        // extend data
+        {
+            self.seq.extend_from_slice(&other.seq);
+            self.flags.extend_from_slice(&other.flags);
+            self.headers.extend_from_slice(&other.headers);
+            self.qual.extend_from_slice(&other.qual);
+            self.l_seq.extend_from_slice(&other.l_seq);
+            self.l_headers.extend_from_slice(&other.l_headers);
+        }
+
+        {
+            // Note:
+            //
+            // Remaining buffers and attributes are left untouched.
+            // These are not modified because they aren't used mid-writing
+            // and are populated during the flush step.
         }
 
         Ok(())
