@@ -2,8 +2,10 @@ use std::io;
 
 use anyhow::{Result, bail};
 use bytemuck::{cast_slice, cast_slice_mut};
-use zstd::stream::{copy_decode, copy_encode};
+use zstd::stream::copy_decode;
 use zstd::zstd_safe;
+
+use crate::core::utils::sized_compress;
 
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
 use super::{BlockHeader, BlockRange, FileHeader, SequencingRecord};
@@ -143,6 +145,11 @@ impl ColumnarBlock {
         }
     }
 
+    /// Calculate the usage of the block as a percentage
+    pub fn usage(&self) -> f64 {
+        self.current_size as f64 / self.header.block_size as f64
+    }
+
     pub(crate) fn can_fit(&self, record: &SequencingRecord<'_>) -> bool {
         self.current_size + record.size() <= self.header.block_size as usize
     }
@@ -198,62 +205,70 @@ impl ColumnarBlock {
     }
 
     /// Compress all native columns into compressed representation
-    fn compress_columns(&mut self) -> Result<()> {
+    fn compress_columns(&mut self, cctx: &mut zstd_safe::CCtx) -> Result<()> {
         // compress sequence lengths
-        copy_encode(
-            cast_slice(&self.l_seq),
+
+        sized_compress(
             &mut self.z_seq_len,
-            self.header.compression_level as i32,
+            cast_slice(&self.l_seq),
+            self.header.compression_level,
+            cctx,
         )?;
 
         if self.headers.len() > 0 {
-            copy_encode(
-                cast_slice(&self.l_headers),
+            sized_compress(
                 &mut self.z_header_len,
-                self.header.compression_level as i32,
+                cast_slice(&self.l_headers),
+                self.header.compression_level,
+                cctx,
             )?;
         }
 
         // compress npos
         if self.npos.len() > 0 {
-            copy_encode(
-                cast_slice(&self.npos),
+            sized_compress(
                 &mut self.z_npos,
-                self.header.compression_level as i32,
+                cast_slice(&self.npos),
+                self.header.compression_level,
+                cctx,
             )?;
         }
 
         // compress sequence
-        copy_encode(
-            cast_slice(&self.ebuf),
+        sized_compress(
             &mut self.z_seq,
-            self.header.compression_level as i32,
+            cast_slice(&self.ebuf),
+            self.header.compression_level,
+            cctx,
         )?;
 
         // compress flags
         if self.flags.len() > 0 {
-            copy_encode(
-                cast_slice(&self.flags),
+            sized_compress(
                 &mut self.z_flags,
-                self.header.compression_level as i32,
+                cast_slice(&self.flags),
+                self.header.compression_level,
+                cctx,
             )?;
         }
 
         // compress headers
         if self.headers.len() > 0 {
-            copy_encode(
-                cast_slice(&self.headers),
+            sized_compress(
                 &mut self.z_headers,
-                self.header.compression_level as i32,
+                cast_slice(&self.headers),
+                self.header.compression_level,
+                cctx,
             )?;
         }
 
         // compress quality
         if self.qual.len() > 0 {
-            copy_encode(
-                cast_slice(&self.qual),
+            sized_compress(
                 &mut self.z_qual,
-                self.header.compression_level as i32,
+                cast_slice(&self.qual),
+                self.header.compression_level,
+                cctx,
             )?;
         }
 
@@ -328,7 +343,11 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    pub fn flush_to<W: io::Write>(&mut self, writer: &mut W) -> Result<Option<BlockHeader>> {
+    pub fn flush_to<W: io::Write>(
+        &mut self,
+        writer: &mut W,
+        cctx: &mut zstd_safe::CCtx,
+    ) -> Result<Option<BlockHeader>> {
         if self.is_empty() {
             return Ok(None);
         }
@@ -340,7 +359,7 @@ impl ColumnarBlock {
         self.fill_npos();
 
         // compress each column
-        self.compress_columns()?;
+        self.compress_columns(cctx)?;
 
         // build the block header
         let header = BlockHeader::from_block(&self);

@@ -1,12 +1,12 @@
 use std::io;
 
 use anyhow::Result;
+use zstd::zstd_safe;
 
 use crate::core::{
     BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader, SequencingRecord,
 };
 
-#[derive(Clone)]
 pub struct ColumnarBlockWriter<W: io::Write> {
     /// Internal writer for the block
     inner: W,
@@ -16,6 +16,19 @@ pub struct ColumnarBlockWriter<W: io::Write> {
 
     /// Offsets of the blocks written by this writer
     offsets: Vec<BlockHeader>,
+
+    /// Compression context for the thread
+    cctx: zstd_safe::CCtx<'static>,
+}
+impl<W: io::Write + Clone> Clone for ColumnarBlockWriter<W> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            block: self.block.clone(),
+            offsets: self.offsets.clone(),
+            cctx: zstd_safe::CCtx::create(),
+        }
+    }
 }
 impl<W: io::Write> ColumnarBlockWriter<W> {
     /// Creates a new writer with the header written to the inner writer
@@ -25,6 +38,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
             inner,
             block: ColumnarBlock::new(header),
             offsets: Vec::default(),
+            cctx: zstd_safe::CCtx::create(),
         };
 
         // Ensure the header is written to the file
@@ -33,12 +47,18 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         Ok(writer)
     }
 
+    /// Calculate the usage of the block as a percentage
+    pub fn usage(&self) -> f64 {
+        self.block.usage()
+    }
+
     /// Creates a new writer without writing the header to the inner writer
     pub fn new_headless(inner: W, header: FileHeader) -> Self {
         Self {
             inner,
             block: ColumnarBlock::new(header),
             offsets: Vec::default(),
+            cctx: zstd_safe::CCtx::create(),
         }
     }
 
@@ -51,9 +71,11 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.block.flush_to(&mut self.inner)?.map(|header| {
-            self.offsets.push(header);
-        });
+        self.block
+            .flush_to(&mut self.inner, &mut self.cctx)?
+            .map(|header| {
+                self.offsets.push(header);
+            });
         Ok(())
     }
 
@@ -81,17 +103,23 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
     pub fn ingest(&mut self, other: &mut ColumnarBlockWriter<Vec<u8>>) -> Result<()> {
         // Write all completed blocks from the other
         self.inner.write_all(&other.inner_data())?;
+        // eprintln!(
+        //     "Wrote {} bytes from completed blocks",
+        //     other.inner_data().len()
+        // );
 
         // Take all offsets from the other
         self.offsets.extend_from_slice(&other.offsets);
 
         // Attempt to ingest the incomplete block from the other
         if self.block.can_ingest(&other.block) {
+            // eprintln!("Can ingest incomplete block");
             self.block.take_incomplete(&other.block)?;
 
         // Make space by flushing the current block
         // Then ingest the incomplete block from the other
         } else {
+            // eprintln!("Cannot ingest incomplete block");
             self.flush()?;
             self.block.take_incomplete(&other.block)?;
         }
@@ -113,5 +141,10 @@ impl ColumnarBlockWriter<Vec<u8>> {
         self.inner.clear();
         self.offsets.clear();
         self.block.clear();
+    }
+
+    /// Returns the number of bytes written to the inner data structure
+    pub fn bytes_written(&self) -> usize {
+        self.inner.len()
     }
 }

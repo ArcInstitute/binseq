@@ -1,6 +1,33 @@
 use std::io;
 
 use anyhow::Result;
+use zstd::zstd_safe;
+
+pub(crate) fn sized_compress(
+    dst: &mut Vec<u8>,
+    src: &[u8],
+    level: u64,
+    cctx: &mut zstd_safe::CCtx,
+) -> Result<()> {
+    // determine the maximum compressed size
+    let max_z_size = zstd_safe::compress_bound(src.len());
+
+    // resize the destination vector to the maximum compressed size
+    //
+    // Note: this uses uninitialized memory, but is safe because we immediately
+    // follow it with a call to `compress` which overwrites the buffer.
+    resize_uninit(dst, max_z_size);
+
+    // Compress the data using the provided compression context
+    let true_size = cctx
+        .compress(dst, src, level as i32)
+        .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+
+    // resize to the true size - clipping all remaining uninitialized memory
+    dst.truncate(true_size);
+
+    Ok(())
+}
 
 pub(crate) fn extension_read<R: io::Read>(
     reader: &mut R,
