@@ -151,6 +151,10 @@ impl MmapReader {
         })
     }
 
+    pub fn is_paired(&self) -> bool {
+        self.block.header.is_paired()
+    }
+
     pub fn num_records(&self) -> usize {
         self.index.num_records()
     }

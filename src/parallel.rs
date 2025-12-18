@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::path::Path;
 
-use crate::{bq, error::ExtensionError, vbq, BinseqRecord, Result};
+use crate::{BinseqRecord, Result, bq, cbq, error::ExtensionError, vbq};
 
 /// An enum abstraction for BINSEQ readers that can process records in parallel
 ///
@@ -12,6 +12,7 @@ use crate::{bq, error::ExtensionError, vbq, BinseqRecord, Result};
 pub enum BinseqReader {
     Bq(bq::MmapReader),
     Vbq(vbq::MmapReader),
+    Cbq(cbq::MmapReader),
 }
 impl BinseqReader {
     pub fn new(path: &str) -> Result<Self> {
@@ -20,6 +21,7 @@ impl BinseqReader {
             Some(ext) => match ext.to_str() {
                 Some("bq") => Ok(Self::Bq(bq::MmapReader::new(path)?)),
                 Some("vbq") => Ok(Self::Vbq(vbq::MmapReader::new(path)?)),
+                Some("cbq") => Ok(Self::Cbq(cbq::MmapReader::new(path)?)),
                 _ => Err(ExtensionError::UnsupportedExtension(path.to_string()).into()),
             },
             None => Err(ExtensionError::UnsupportedExtension(path.to_string()).into()),
@@ -31,7 +33,7 @@ impl BinseqReader {
     /// Note: This setting applies to VBQ readers only.
     pub fn set_decode_block(&mut self, decode_block: bool) {
         match self {
-            Self::Bq(_) => {
+            Self::Bq(_) | Self::Cbq(_) => {
                 // no-op
             }
             Self::Vbq(reader) => reader.set_decode_block(decode_block),
@@ -43,6 +45,7 @@ impl BinseqReader {
         match self {
             Self::Bq(reader) => reader.is_paired(),
             Self::Vbq(reader) => reader.is_paired(),
+            Self::Cbq(reader) => reader.is_paired(),
         }
     }
 
@@ -50,6 +53,7 @@ impl BinseqReader {
         match self {
             Self::Bq(reader) => Ok(reader.num_records()),
             Self::Vbq(reader) => reader.num_records(),
+            Self::Cbq(reader) => Ok(reader.num_records()),
         }
     }
 
@@ -79,6 +83,7 @@ impl BinseqReader {
         match self {
             Self::Bq(reader) => reader.process_parallel_range(processor, num_threads, range),
             Self::Vbq(reader) => reader.process_parallel_range(processor, num_threads, range),
+            Self::Cbq(reader) => reader.process_parallel_range(processor, num_threads, range),
         }
     }
 }
@@ -101,6 +106,7 @@ impl ParallelReader for BinseqReader {
         match self {
             Self::Bq(reader) => reader.process_parallel_range(processor, num_threads, range),
             Self::Vbq(reader) => reader.process_parallel_range(processor, num_threads, range),
+            Self::Cbq(reader) => reader.process_parallel_range(processor, num_threads, range),
         }
     }
 }
