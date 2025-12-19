@@ -10,6 +10,7 @@ use crate::{
     },
 };
 
+/// A reader for CBQ files operating on generic readers (streaming).
 pub struct Reader<R: io::Read> {
     inner: R,
     pub block: ColumnarBlock,
@@ -90,6 +91,7 @@ impl<R: io::Read> Reader<R> {
     }
 }
 
+/// A memory-mapped reader for CBQ files.
 pub struct MmapReader {
     inner: Arc<Mmap>,
     index: Arc<Index>,

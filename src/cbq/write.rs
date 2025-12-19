@@ -9,6 +9,7 @@ use crate::{
     },
 };
 
+/// Writer for CBQ files operating on generic writers (streaming).
 pub struct ColumnarBlockWriter<W: io::Write> {
     /// Internal writer for the block
     inner: W,

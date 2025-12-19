@@ -5,7 +5,7 @@ mod index;
 mod sequencing_record;
 pub(crate) mod utils;
 
-pub use block::ColumnarBlock;
+pub use block::{ColumnarBlock, RefRecord, RefRecordIter};
 pub use block_header::BlockHeader;
 pub use header::{FileHeader, FileHeaderBuilder};
 pub use index::{BlockRange, Index, IndexFooter, IndexHeader};

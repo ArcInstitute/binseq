@@ -14,6 +14,7 @@ use crate::{BinseqRecord, Result};
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
 use super::{BlockHeader, BlockRange, FileHeader, SequencingRecord};
 
+/// A block of records where all data is stored in separate columns.
 #[derive(Clone, Default)]
 pub struct ColumnarBlock {
     /// Separate columns for each data type
@@ -625,6 +626,7 @@ impl ColumnarBlock {
     }
 }
 
+/// A zero-copy iterator over [RefRecord](crate::cbq::RefRecord)s in a [ColumnarBlock](crate::cbq::ColumnarBlock)
 pub struct RefRecordIter<'a> {
     /// The block containing the records
     block: &'a ColumnarBlock,
@@ -707,6 +709,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
     }
 }
 
+/// A convenience struct for creating global indices as `&[u8]` buffers
 #[derive(Clone, Copy)]
 struct RefRecordIndex {
     index_buf: [u8; 20],
@@ -729,6 +732,7 @@ impl RefRecordIndex {
     }
 }
 
+/// A reference to a record in a [ColumnarBlock](crate::cbq::ColumnarBlock) that implements the [BinseqRecord](crate::BinseqRecord) trait
 #[derive(Clone, Copy)]
 pub struct RefRecord<'a> {
     /// A reference to the block containing this record

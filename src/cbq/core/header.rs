@@ -18,6 +18,9 @@ pub const PRESENCE_HEADERS: u64 = 1 << 2;
 /// Records have flags
 pub const PRESENCE_FLAGS: u64 = 1 << 3;
 
+/// The file header for a CBQ file.
+///
+/// This is stored identically in memory and on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod)]
 #[repr(C)]
 pub struct FileHeader {
@@ -124,6 +127,7 @@ impl FileHeader {
     }
 }
 
+/// A convenience struct for building a [FileHeader](crate::cbq::FileHeader) using a builder pattern.
 #[derive(Default)]
 pub struct FileHeaderBuilder {
     compression_level: Option<usize>,

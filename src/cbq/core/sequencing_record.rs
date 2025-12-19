@@ -1,5 +1,6 @@
 use crate::{Result, error::CbqError};
 
+/// A zero-copy record used to load sequences into a [ColumnarBlock](crate::cbq::ColumnarBlock).
 #[derive(Clone, Copy, Default)]
 pub struct SequencingRecord<'a> {
     pub(crate) s_seq: &'a [u8],
@@ -68,6 +69,7 @@ impl<'a> SequencingRecord<'a> {
     }
 }
 
+/// A convenience builder struct for creating a [SequencingRecord]
 #[derive(Default)]
 pub struct SequencingRecordBuilder<'a> {
     s_seq: Option<&'a [u8]>,

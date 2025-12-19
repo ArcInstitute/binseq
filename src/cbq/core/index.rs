@@ -5,6 +5,9 @@ use crate::{Result, error::CbqError};
 
 use super::{BlockHeader, FileHeader, INDEX_MAGIC};
 
+/// The header for a compressed index.
+///
+/// This is stored identically in memory and on disk.
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct IndexHeader {
@@ -42,6 +45,9 @@ impl IndexHeader {
     }
 }
 
+/// The footer for a compressed index.
+///
+/// This is stored identically in memory and on disk.
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct IndexFooter {
@@ -187,6 +193,10 @@ impl Iterator for BlockIter<'_> {
         }
     }
 }
+
+/// A struct representing a block range in a CBQ file and stored in the [`Index`](crate::cbq::Index)
+///
+/// This is stored identically in memory and on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod, Default)]
 #[repr(C)]
 pub struct BlockRange {
