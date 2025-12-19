@@ -626,40 +626,52 @@ impl<'a> Iterator for RefRecordIter<'a> {
     type Item = RefRecord<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.block.num_records {
+        let max_records = if self.is_paired {
+            self.block.num_records / 2
+        } else {
+            self.block.num_records
+        };
+
+        if self.index >= max_records {
             None
         } else {
+            // Calculate the actual array index
+            let array_idx = if self.is_paired {
+                self.index * 2
+            } else {
+                self.index
+            };
+
             let sseq_span = Span::new_u64(
-                self.block.l_seq_offsets[self.index],
-                self.block.l_seq[self.index],
+                self.block.l_seq_offsets[array_idx],
+                self.block.l_seq[array_idx],
             );
             let sheader_span = if self.has_headers {
                 Some(Span::new_u64(
-                    self.block.l_header_offsets[self.index],
-                    self.block.l_headers[self.index],
+                    self.block.l_header_offsets[array_idx],
+                    self.block.l_headers[array_idx],
                 ))
             } else {
                 None
             };
             let xseq_span = if self.is_paired {
                 Some(Span::new_u64(
-                    self.block.l_seq_offsets[self.index + 1],
-                    self.block.l_seq[self.index + 1],
+                    self.block.l_seq_offsets[array_idx + 1],
+                    self.block.l_seq[array_idx + 1],
                 ))
             } else {
                 None
             };
             let xheader_span = if self.is_paired && self.has_headers {
                 Some(Span::new_u64(
-                    self.block.l_header_offsets[self.index + 1],
-                    self.block.l_headers[self.index + 1],
+                    self.block.l_header_offsets[array_idx + 1],
+                    self.block.l_headers[array_idx + 1],
                 ))
             } else {
                 None
             };
 
-            let global_index =
-                self.range.cumulative_records as usize - (self.block.num_records + self.index);
+            let global_index = self.range.cumulative_records as usize - max_records + self.index;
 
             let rr_index = RefRecordIndex::new(global_index, &mut self.header_buffer);
 
@@ -674,7 +686,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 rr_index,
             };
 
-            self.index += 1 + usize::from(self.is_paired);
+            self.index += 1; // Just increment by 1 now
             Some(record)
         }
     }

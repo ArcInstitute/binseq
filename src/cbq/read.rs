@@ -4,7 +4,7 @@ use memmap2::Mmap;
 use zstd::{stream::copy_decode, zstd_safe};
 
 use crate::{
-    ParallelProcessor, ParallelReader, Result,
+    BinseqRecord, ParallelProcessor, ParallelReader, Result,
     cbq::core::{
         BlockHeader, BlockRange, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader,
     },
@@ -237,11 +237,25 @@ impl ParallelReader for MmapReader {
                 .copied()
                 .collect::<Vec<_>>();
 
+            eprintln!(
+                "Thread {} block range: {}-{}. First block Cumulative Records: {}. Last block Cumulative Records: {}",
+                thread_id,
+                start_block_idx,
+                end_block_idx,
+                t_block_ranges[0].cumulative_records,
+                t_block_ranges.last().unwrap().cumulative_records
+            );
+
             let thread_handle = thread::spawn(move || -> crate::Result<()> {
-                for range in t_block_ranges {
-                    t_reader.load_block(range)?;
-                    for record in t_reader.block.iter_records(range) {
-                        t_proc.process_record(record)?;
+                for b_range in t_block_ranges {
+                    t_reader.load_block(b_range)?;
+                    for record in t_reader.block.iter_records(b_range) {
+                        let global_record_idx = record.index() as usize;
+
+                        // Only process records within our specified range
+                        if global_record_idx >= range.start && global_record_idx < range.end {
+                            t_proc.process_record(record)?;
+                        }
                     }
                     t_proc.on_batch_complete()?;
                 }
