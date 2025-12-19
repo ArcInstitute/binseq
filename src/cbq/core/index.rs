@@ -160,7 +160,7 @@ impl Index {
             count += 1;
             last_block = block;
         }
-        total_size / count as f64
+        total_size / f64::from(count)
     }
 
     pub fn pprint(&self) {
