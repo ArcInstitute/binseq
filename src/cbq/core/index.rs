@@ -144,6 +144,30 @@ impl Index {
             pos: 0,
         }
     }
+
+    #[must_use]
+    pub fn average_block_size(&self) -> f64 {
+        let mut block_iter = self.iter_blocks();
+        let mut last_block = match block_iter.next() {
+            Some(block) => block,
+            None => return 0.0,
+        };
+        let mut total_size = 0.0;
+        let mut count = 0;
+        for block in block_iter {
+            let last_block_size = block.offset - last_block.offset;
+            total_size += last_block_size as f64;
+            count += 1;
+            last_block = block;
+        }
+        total_size / count as f64
+    }
+
+    pub fn pprint(&self) {
+        for block in self.iter_blocks() {
+            println!("{block:?}");
+        }
+    }
 }
 
 pub struct BlockIter<'a> {

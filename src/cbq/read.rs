@@ -149,6 +149,11 @@ impl MmapReader {
     }
 
     #[must_use]
+    pub fn header(&self) -> FileHeader {
+        self.block.header
+    }
+
+    #[must_use]
     pub fn is_paired(&self) -> bool {
         self.block.header.is_paired()
     }
@@ -156,6 +161,16 @@ impl MmapReader {
     #[must_use]
     pub fn num_records(&self) -> usize {
         self.index.num_records()
+    }
+
+    #[must_use]
+    pub fn num_blocks(&self) -> usize {
+        self.index.num_blocks()
+    }
+
+    #[must_use]
+    pub fn index(&self) -> &Index {
+        &self.index
     }
 
     fn load_block(&mut self, range: BlockRange) -> Result<()> {
