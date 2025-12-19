@@ -3,6 +3,8 @@ use std::io;
 use anyhow::{Result, bail};
 use bitnuc::BitSize;
 use bytemuck::{cast_slice, cast_slice_mut};
+use sucds::Serializable;
+use sucds::mii_sequences::{EliasFano, EliasFanoBuilder};
 use zstd::stream::copy_decode;
 use zstd::zstd_safe;
 
@@ -29,6 +31,13 @@ pub struct ColumnarBlock {
 
     /// Reusable buffer for encoding sequences
     ebuf: Vec<u64>,
+
+    /// An Elias-Fano encoding for the N-positions
+    pub(crate) ef: Option<EliasFano>,
+    /// Reusable buffer for encoding Elias-Fano struct
+    pub(crate) ef_bytes: Vec<u8>,
+    /// Length of serialized Elias-Fano encoding in bytes
+    pub(crate) len_nef: usize,
 
     // Reusable zstd compression buffer for columnar data
     pub(crate) z_seq_len: Vec<u8>,
@@ -95,6 +104,7 @@ impl ColumnarBlock {
             self.headers.clear();
             self.qual.clear();
             self.npos.clear();
+            self.ef = None;
         }
 
         // clear encodings
@@ -107,6 +117,7 @@ impl ColumnarBlock {
             self.z_flags.clear();
             self.z_headers.clear();
             self.z_qual.clear();
+            self.ef_bytes.clear();
         }
     }
 
@@ -241,19 +252,34 @@ impl ColumnarBlock {
     }
 
     /// Find all positions of 'N' in the sequence
-    fn fill_npos(&mut self) {
+    fn fill_npos(&mut self) -> Result<()> {
         self.npos
             .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64));
         self.num_npos = self.npos.len();
+
+        // build Elias-Fano encoding for N positions
+        if self.npos.is_empty() {
+            self.ef = None;
+            Ok(())
+        } else {
+            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())?;
+            ef_builder.extend(self.npos.iter().map(|idx| *idx as usize))?;
+            let ef = ef_builder.build();
+
+            self.ef = Some(ef);
+            Ok(())
+        }
     }
 
     /// Convert all ambiguous bases back to N
     fn backfill_npos(&mut self) {
-        self.npos.iter().for_each(|idx| {
-            if let Some(base) = self.seq.get_mut(*idx as usize) {
-                *base = b'N';
-            }
-        });
+        if let Some(ef) = self.ef.as_ref() {
+            ef.iter(0).for_each(|idx| {
+                if let Some(base) = self.seq.get_mut(idx) {
+                    *base = b'N';
+                }
+            })
+        }
     }
 
     /// Compress all native columns into compressed representation
@@ -266,9 +292,11 @@ impl ColumnarBlock {
             sized_compress(&mut self.z_header_len, cast_slice(&self.l_headers), cctx)?;
         }
 
-        // compress npos
-        if !self.npos.is_empty() {
-            sized_compress(&mut self.z_npos, cast_slice(&self.npos), cctx)?;
+        // compress N-positions (Elias-Fano encoded)
+        if let Some(ef) = self.ef.as_ref() {
+            ef.serialize_into(&mut self.ef_bytes)?;
+            self.len_nef = self.ef_bytes.len();
+            sized_compress(&mut self.z_npos, &self.ef_bytes, cctx)?;
         }
 
         // compress sequence
@@ -311,8 +339,12 @@ impl ColumnarBlock {
 
         // decompress npos
         if !self.z_npos.is_empty() {
-            self.npos.resize(self.num_npos, 0);
-            copy_decode(self.z_npos.as_slice(), cast_slice_mut(&mut self.npos))?;
+            self.ef_bytes.resize(self.len_nef, 0);
+            copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
+
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
+            self.num_npos = ef.len();
+            self.ef = Some(ef);
         }
 
         // decompress sequence
@@ -373,7 +405,7 @@ impl ColumnarBlock {
         self.encode_sequence()?;
 
         // fill npos
-        self.fill_npos();
+        self.fill_npos()?;
 
         // compress each column
         self.compress_columns(cctx)?;
@@ -401,7 +433,7 @@ impl ColumnarBlock {
         // reload the internal state from the reader
         self.nuclen = header.nuclen as usize;
         self.num_records = header.num_records as usize;
-        self.num_npos = header.num_npos as usize;
+        self.len_nef = header.len_nef as usize;
 
         extension_read(reader, &mut self.z_seq_len, header.len_z_seq_len as usize)?;
         extension_read(
@@ -429,7 +461,7 @@ impl ColumnarBlock {
         // reload the internal state from the header
         self.nuclen = header.nuclen as usize;
         self.num_records = header.num_records as usize;
-        self.num_npos = header.num_npos as usize;
+        self.len_nef = header.len_nef as usize;
 
         let mut byte_offset = 0;
 
@@ -461,12 +493,17 @@ impl ColumnarBlock {
 
         // decompress npos
         if header.len_z_npos > 0 {
-            resize_uninit(&mut self.npos, self.num_npos);
+            resize_uninit(&mut self.ef_bytes, self.len_nef);
             dctx.decompress(
-                cast_slice_mut(&mut self.npos),
+                &mut self.ef_bytes,
                 slice_and_increment(&mut byte_offset, header.len_z_npos, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+
+            // reinitialize the EliasFano encoding
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
+            self.num_npos = ef.len();
+            self.ef = Some(ef);
         }
 
         // decompress sequence

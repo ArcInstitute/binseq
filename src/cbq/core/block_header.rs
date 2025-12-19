@@ -24,8 +24,8 @@ pub struct BlockHeader {
     // full decoded length of the sequence block
     pub(crate) nuclen: u64,
 
-    // number of npos positions
-    pub(crate) num_npos: u64,
+    // length of uncompressed N-positions (Elias-Fano encoded)
+    pub(crate) len_nef: u64,
 
     // number of records in the block
     pub num_records: u64,
@@ -44,7 +44,7 @@ impl BlockHeader {
             len_z_headers: block.z_headers.len() as u64,
             len_z_qual: block.z_qual.len() as u64,
             nuclen: block.nuclen as u64,
-            num_npos: block.num_npos as u64,
+            len_nef: block.len_nef as u64,
             num_records: block.num_records as u64,
         }
     }
