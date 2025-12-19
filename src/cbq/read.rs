@@ -1,11 +1,10 @@
 use std::{fs, io, path::Path, sync::Arc, thread};
 
-use anyhow::Result;
 use memmap2::Mmap;
 use zstd::{stream::copy_decode, zstd_safe};
 
 use crate::{
-    ParallelProcessor, ParallelReader,
+    ParallelProcessor, ParallelReader, Result,
     cbq::core::{
         BlockHeader, BlockRange, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader,
     },

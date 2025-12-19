@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use crate::{Result, error::CbqError};
 
 #[derive(Clone, Copy, Default)]
 pub struct SequencingRecord<'a> {
@@ -130,7 +130,7 @@ impl<'a> SequencingRecordBuilder<'a> {
 impl<'a> SequencingRecordBuilder<'a> {
     pub fn build(self) -> Result<SequencingRecord<'a>> {
         if self.s_seq.is_none() {
-            bail!("Missing s_seq on building sequencing record");
+            return Err(CbqError::MissingSequenceOnSequencingRecord.into());
         }
         Ok(SequencingRecord {
             s_seq: self.s_seq.unwrap(),

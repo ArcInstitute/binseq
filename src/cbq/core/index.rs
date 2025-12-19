@@ -1,6 +1,7 @@
-use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable};
 use zstd::stream::copy_encode;
+
+use crate::{Result, error::CbqError};
 
 use super::{BlockHeader, FileHeader, INDEX_MAGIC};
 
@@ -33,7 +34,7 @@ impl IndexHeader {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let header: Self = *bytemuck::from_bytes(bytes);
         if header.magic != *INDEX_MAGIC {
-            bail!("Invalid index header magic");
+            return Err(CbqError::InvalidIndexHeaderMagic.into());
         }
         Ok(header)
     }
@@ -63,7 +64,7 @@ impl IndexFooter {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let footer: Self = *bytemuck::from_bytes(bytes);
         if footer.magic != *INDEX_MAGIC {
-            bail!("Invalid index footer magic");
+            return Err(CbqError::InvalidIndexFooterMagic.into());
         }
         Ok(footer)
     }
@@ -94,10 +95,11 @@ impl Index {
         bytemuck::cast_slice(&self.ranges)
     }
 
+    /// Builds the index from a byte slice
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let ranges = match bytemuck::try_cast_slice(bytes) {
             Ok(ranges) => ranges.to_vec(),
-            Err(_) => bail!("Failed to cast bytes to Index"),
+            Err(_) => return Err(CbqError::IndexCastingError.into()),
         };
         Ok(Self { ranges })
     }

@@ -12,6 +12,10 @@ pub enum Error {
     #[error("Error processing header: {0}")]
     HeaderError(#[from] HeaderError),
 
+    /// Errors related to the CBQ format
+    #[error("Error processing CBQ: {0}")]
+    CbqError(#[from] CbqError),
+
     /// Errors that occur during write operations
     #[error("Error writing file: {0}")]
     WriteError(#[from] WriteError),
@@ -211,9 +215,10 @@ pub enum WriteError {
     /// When a record is too large to fit in a block of the configured size
     ///
     /// The first parameter is the record size, the second is the maximum block size
-    #[error("Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size.")]
+    #[error(
+        "Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size."
+    )]
     RecordSizeExceedsMaximumBlockSize(usize, usize),
-
     /// When trying to ingest blocks with different sizes than expected
     ///
     /// The first parameter is the expected size, the second is the found size
@@ -270,6 +275,60 @@ impl IndexError {
     pub fn is_mismatch(&self) -> bool {
         matches!(self, Self::ByteSizeMismatch(_, _) | _) // Note: this appears to always return true regardless of error type
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum CbqError {
+    #[error(
+        "Record size ({record_size}) exceeds maximum block size ({max_block_size}) - Try increasing block size."
+    )]
+    ExceedsMaximumBlockSize {
+        max_block_size: usize,
+        record_size: usize,
+    },
+
+    #[error("Cannot ingest block of size {other_block_size} into block of size {self_block_size}")]
+    CannotIngestBlock {
+        self_block_size: usize,
+        other_block_size: usize,
+    },
+
+    /// Attempting to write a record into a full block
+    #[error(
+        "Block(size: {block_size}) will be exceeded by record size {record_size}. Current size: {current_size}"
+    )]
+    BlockFull {
+        current_size: usize,
+        record_size: usize,
+        block_size: usize,
+    },
+
+    #[error(
+        "Cannot push record ({attribute}: {actual}) with block configuration ({attribute}: {expected})"
+    )]
+    ConfigurationMismatch {
+        attribute: &'static str,
+        expected: bool,
+        actual: bool,
+    },
+
+    #[error("Invalid block header MAGIC found")]
+    InvalidBlockHeaderMagic,
+
+    #[error("Invalid file header MAGIC found")]
+    InvalidFileHeaderMagic,
+
+    #[error("Invalid index header MAGIC found")]
+    InvalidIndexHeaderMagic,
+
+    #[error("Invalid index footer MAGIC found")]
+    InvalidIndexFooterMagic,
+
+    #[error("Unable to cast bytes to Index - likely an alignment error")]
+    IndexCastingError,
+
+    #[error("SequenceRecordBuilder failed on build due to missing primary sequence (`s_seq`)")]
+    MissingSequenceOnSequencingRecord,
 }
 
 #[derive(thiserror::Error, Debug)]

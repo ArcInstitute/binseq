@@ -1,10 +1,12 @@
 use std::io;
 
-use anyhow::Result;
 use zstd::zstd_safe;
 
-use crate::cbq::core::{
-    BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader, SequencingRecord,
+use crate::{
+    Result,
+    cbq::core::{
+        BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader, SequencingRecord,
+    },
 };
 
 pub struct ColumnarBlockWriter<W: io::Write> {

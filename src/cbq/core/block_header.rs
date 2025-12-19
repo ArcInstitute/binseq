@@ -1,7 +1,8 @@
 use std::io;
 
-use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable};
+
+use crate::{IntoBinseqError, Result, error::CbqError};
 
 use super::{BLOCK_MAGIC, ColumnarBlock};
 
@@ -68,12 +69,14 @@ impl BlockHeader {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let header: Self = *bytemuck::from_bytes(bytes);
         if header.magic != *BLOCK_MAGIC {
-            bail!("Invalid Block Header found")
+            return Err(CbqError::InvalidBlockHeaderMagic.into());
         }
         Ok(header)
     }
 
-    pub fn write<W: io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
-        writer.write_all(self.as_bytes())
+    pub fn write<W: io::Write>(&self, writer: &mut W) -> Result<()> {
+        writer
+            .write_all(self.as_bytes())
+            .map_err(IntoBinseqError::into_binseq_error)
     }
 }

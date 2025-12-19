@@ -1,6 +1,5 @@
 use std::io;
 
-use anyhow::{Result, bail};
 use bitnuc::BitSize;
 use bytemuck::{cast_slice, cast_slice_mut};
 use sucds::Serializable;
@@ -8,8 +7,9 @@ use sucds::mii_sequences::{EliasFano, EliasFanoBuilder};
 use zstd::stream::copy_decode;
 use zstd::zstd_safe;
 
-use crate::BinseqRecord;
 use crate::cbq::core::utils::sized_compress;
+use crate::error::{CbqError, WriteError};
+use crate::{BinseqRecord, Result};
 
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
 use super::{BlockHeader, BlockRange, FileHeader, SequencingRecord};
@@ -177,45 +177,54 @@ impl ColumnarBlock {
     fn validate_record(&self, record: &SequencingRecord) -> Result<()> {
         if !self.can_fit(record) {
             if record.size() > self.header.block_size as usize {
-                bail!(
-                    "Record size ({}) exceeds block size ({})",
+                return Err(WriteError::RecordSizeExceedsMaximumBlockSize(
                     record.size(),
-                    self.header.block_size
+                    self.header.block_size as usize,
                 )
+                .into());
             }
-            bail!("Block is full")
+            return Err(CbqError::BlockFull {
+                current_size: self.current_size,
+                record_size: record.size(),
+                block_size: self.header.block_size as usize,
+            }
+            .into());
         }
 
         if record.is_paired() != self.header.is_paired() {
-            bail!(
-                "Cannot push record (paired: {}) with block config (paired: {})",
-                record.is_paired(),
-                self.header.is_paired()
-            )
+            return Err(CbqError::ConfigurationMismatch {
+                attribute: "paired",
+                expected: self.header.is_paired(),
+                actual: record.is_paired(),
+            }
+            .into());
         }
 
         if record.has_flags() != self.header.has_flags() {
-            bail!(
-                "Cannot push record (flags: {}) with block config (flags: {})",
-                record.has_flags(),
-                self.header.has_flags()
-            )
+            return Err(CbqError::ConfigurationMismatch {
+                attribute: "flags",
+                expected: self.header.has_flags(),
+                actual: record.has_flags(),
+            }
+            .into());
         }
 
         if record.has_headers() != self.header.has_headers() {
-            bail!(
-                "Cannot push record (headers: {}) with block config (headers: {})",
-                record.has_headers(),
-                self.header.has_headers()
-            )
+            return Err(CbqError::ConfigurationMismatch {
+                attribute: "headers",
+                expected: self.header.has_headers(),
+                actual: record.has_headers(),
+            }
+            .into());
         }
 
         if record.has_qualities() != self.header.has_qualities() {
-            bail!(
-                "Cannot push record (qualities: {}) with block config (qualities: {})",
-                record.has_qualities(),
-                self.header.has_qualities()
-            )
+            return Err(CbqError::ConfigurationMismatch {
+                attribute: "qualities",
+                expected: self.header.has_qualities(),
+                actual: record.has_qualities(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -558,7 +567,11 @@ impl ColumnarBlock {
 
     pub(crate) fn take_incomplete(&mut self, other: &Self) -> Result<()> {
         if !self.can_ingest(other) {
-            bail!("Cannot fit the other block");
+            return Err(CbqError::CannotIngestBlock {
+                self_block_size: self.header.block_size as usize,
+                other_block_size: other.header.block_size as usize,
+            }
+            .into());
         }
 
         // increment attributes

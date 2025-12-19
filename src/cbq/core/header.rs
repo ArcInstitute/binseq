@@ -1,7 +1,8 @@
 use std::fmt::Display;
 
-use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable};
+
+use crate::{Result, error::CbqError};
 
 use super::{DEFAULT_BLOCK_SIZE, DEFAULT_COMPRESSION_LEVEL, FILE_MAGIC, FILE_VERSION};
 
@@ -112,7 +113,7 @@ impl FileHeader {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let header: Self = *bytemuck::from_bytes(bytes);
         if header.magic != *FILE_MAGIC {
-            bail!("Invalid file magic")
+            return Err(CbqError::InvalidFileHeaderMagic.into());
         }
         Ok(header)
     }
