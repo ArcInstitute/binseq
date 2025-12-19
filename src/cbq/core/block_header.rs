@@ -28,8 +28,11 @@ pub struct BlockHeader {
     // length of uncompressed N-positions (Elias-Fano encoded)
     pub(crate) len_nef: u64,
 
-    // number of records in the block
+    /// number of records in the block
     pub num_records: u64,
+
+    /// Number of sequences in the block
+    pub num_sequences: u64,
 }
 impl BlockHeader {
     #[must_use]
@@ -48,6 +51,7 @@ impl BlockHeader {
             nuclen: block.nuclen as u64,
             len_nef: block.len_nef as u64,
             num_records: block.num_records as u64,
+            num_sequences: block.num_sequences as u64,
         }
     }
 

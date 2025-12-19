@@ -53,7 +53,17 @@ pub struct ColumnarBlock {
     l_header_offsets: Vec<u64>,
 
     /// Number of records in the block
+    ///
+    /// A record is a logical unit of data.
+    /// If the records are paired sequences this is the number of pairs.
     pub(crate) num_records: usize,
+
+    /// Number of sequences in the block
+    ///
+    /// This is the same as the number of records for unpaired sequences.
+    /// For paired sequences it will be twice the number of records.
+    pub(crate) num_sequences: usize,
+
     /// Total nucleotides in this block
     pub(crate) nuclen: usize,
     /// Number of npos positions
@@ -84,6 +94,7 @@ impl ColumnarBlock {
         // clear index counters
         {
             self.nuclen = 0;
+            self.num_sequences = 0;
             self.num_records = 0;
             self.current_size = 0;
             self.num_npos = 0;
@@ -124,9 +135,11 @@ impl ColumnarBlock {
     fn add_sequence(&mut self, record: &SequencingRecord) {
         self.l_seq.push(record.s_seq.len() as u64);
         self.seq.extend_from_slice(record.s_seq);
+        self.num_sequences += 1;
         if let Some(x_seq) = record.x_seq {
             self.l_seq.push(x_seq.len() as u64);
             self.seq.extend_from_slice(x_seq);
+            self.num_sequences += 1;
         }
 
         // keep the sequence size up to date
@@ -236,13 +249,8 @@ impl ColumnarBlock {
         self.add_flag(&record);
         self.add_headers(&record);
         self.add_quality(&record);
-
-        if record.is_paired() {
-            self.num_records += 2;
-        } else {
-            self.num_records += 1;
-        }
         self.current_size += record.size();
+        self.num_records += 1;
 
         Ok(())
     }
@@ -333,13 +341,13 @@ impl ColumnarBlock {
     pub fn decompress_columns(&mut self) -> Result<()> {
         // decompress sequence lengths
         {
-            self.l_seq.resize(self.num_records, 0);
+            self.l_seq.resize(self.num_sequences, 0);
             copy_decode(self.z_seq_len.as_slice(), cast_slice_mut(&mut self.l_seq))?;
         }
 
         // decompress header lengths
         if !self.z_header_len.is_empty() {
-            self.l_headers.resize(self.num_records, 0);
+            self.l_headers.resize(self.num_sequences, 0);
             copy_decode(
                 self.z_header_len.as_slice(),
                 cast_slice_mut(&mut self.l_headers),
@@ -442,6 +450,7 @@ impl ColumnarBlock {
         // reload the internal state from the reader
         self.nuclen = header.nuclen as usize;
         self.num_records = header.num_records as usize;
+        self.num_sequences = header.num_sequences as usize;
         self.len_nef = header.len_nef as usize;
 
         extension_read(reader, &mut self.z_seq_len, header.len_z_seq_len as usize)?;
@@ -470,13 +479,14 @@ impl ColumnarBlock {
         // reload the internal state from the header
         self.nuclen = header.nuclen as usize;
         self.num_records = header.num_records as usize;
+        self.num_sequences = header.num_sequences as usize;
         self.len_nef = header.len_nef as usize;
 
         let mut byte_offset = 0;
 
         // decompress sequence lengths
         {
-            resize_uninit(&mut self.l_seq, self.num_records);
+            resize_uninit(&mut self.l_seq, self.num_sequences);
             dctx.decompress(
                 cast_slice_mut(&mut self.l_seq),
                 slice_and_increment(&mut byte_offset, header.len_z_seq_len, bytes),
@@ -486,7 +496,7 @@ impl ColumnarBlock {
 
         // decompress header lengths
         if header.len_z_header_len > 0 {
-            resize_uninit(&mut self.l_headers, self.num_records);
+            resize_uninit(&mut self.l_headers, self.num_sequences);
             dctx.decompress(
                 cast_slice_mut(&mut self.l_headers),
                 slice_and_increment(&mut byte_offset, header.len_z_header_len, bytes),
@@ -578,6 +588,7 @@ impl ColumnarBlock {
         {
             self.nuclen += other.nuclen;
             self.num_records += other.num_records;
+            self.num_sequences += other.num_sequences;
             self.current_size += other.current_size;
         }
 
@@ -615,63 +626,67 @@ impl ColumnarBlock {
 }
 
 pub struct RefRecordIter<'a> {
+    /// The block containing the records
     block: &'a ColumnarBlock,
+
+    /// The record range of this block
     range: BlockRange,
+
+    /// Record index within the block
     index: usize,
+
+    /// Convenience attribute if block is paired
     is_paired: bool,
+
+    /// Convenience attribute if block has headers
     has_headers: bool,
+
+    /// Preallocated itoa buffer for converting global record index to string
     header_buffer: itoa::Buffer,
 }
 impl<'a> Iterator for RefRecordIter<'a> {
     type Item = RefRecord<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let max_records = if self.is_paired {
-            self.block.num_records / 2
-        } else {
-            self.block.num_records
-        };
-
-        if self.index >= max_records {
+        if self.index >= self.block.num_records {
             None
         } else {
             // Calculate the actual array index
-            let array_idx = if self.is_paired {
+            let seq_idx = if self.is_paired {
                 self.index * 2
             } else {
                 self.index
             };
 
-            let sseq_span = Span::new_u64(
-                self.block.l_seq_offsets[array_idx],
-                self.block.l_seq[array_idx],
-            );
+            let sseq_span =
+                Span::new_u64(self.block.l_seq_offsets[seq_idx], self.block.l_seq[seq_idx]);
             let sheader_span = if self.has_headers {
                 Some(Span::new_u64(
-                    self.block.l_header_offsets[array_idx],
-                    self.block.l_headers[array_idx],
+                    self.block.l_header_offsets[seq_idx],
+                    self.block.l_headers[seq_idx],
                 ))
             } else {
                 None
             };
             let xseq_span = if self.is_paired {
                 Some(Span::new_u64(
-                    self.block.l_seq_offsets[array_idx + 1],
-                    self.block.l_seq[array_idx + 1],
+                    self.block.l_seq_offsets[seq_idx + 1],
+                    self.block.l_seq[seq_idx + 1],
                 ))
             } else {
                 None
             };
             let xheader_span = if self.is_paired && self.has_headers {
                 Some(Span::new_u64(
-                    self.block.l_header_offsets[array_idx + 1],
-                    self.block.l_headers[array_idx + 1],
+                    self.block.l_header_offsets[seq_idx + 1],
+                    self.block.l_headers[seq_idx + 1],
                 ))
             } else {
                 None
             };
 
-            let global_index = self.range.cumulative_records as usize - max_records + self.index;
+            let global_index =
+                self.range.cumulative_records as usize - self.block.num_records + self.index;
 
             let rr_index = RefRecordIndex::new(global_index, &mut self.header_buffer);
 
@@ -686,7 +701,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 rr_index,
             };
 
-            self.index += 1; // Just increment by 1 now
+            self.index += 1;
             Some(record)
         }
     }
