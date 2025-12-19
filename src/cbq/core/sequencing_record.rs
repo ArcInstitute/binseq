@@ -35,10 +35,10 @@ impl<'a> SequencingRecord<'a> {
     /// Returns the size of the record in bytes
     #[inline]
     pub fn size(&self) -> usize {
-        self.s_seq.len()
+        (self.s_seq.len().div_ceil(32))
             + self.s_qual.map_or(0, |q| q.len())
             + self.s_header.map_or(0, |h| h.len())
-            + self.x_seq.map_or(0, |q| q.len())
+            + self.x_seq.map_or(0, |q| q.len().div_ceil(32))
             + self.x_qual.map_or(0, |q| q.len())
             + self.x_header.map_or(0, |h| h.len())
             + self.flag.map_or(0, |f| f.to_le_bytes().len())

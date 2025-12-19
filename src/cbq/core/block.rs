@@ -165,6 +165,13 @@ impl ColumnarBlock {
     /// Ensure that the record can be pushed into the block
     fn validate_record(&self, record: &SequencingRecord) -> Result<()> {
         if !self.can_fit(record) {
+            if record.size() > self.header.block_size as usize {
+                bail!(
+                    "Record size ({}) exceeds block size ({})",
+                    record.size(),
+                    self.header.block_size
+                )
+            }
             bail!("Block is full")
         }
 
