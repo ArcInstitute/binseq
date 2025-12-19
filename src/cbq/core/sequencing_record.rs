@@ -37,10 +37,10 @@ impl<'a> SequencingRecord<'a> {
     #[inline]
     #[must_use]
     pub fn size(&self) -> usize {
-        (self.s_seq.len().div_ceil(32))
+        (self.s_seq.len().div_ceil(4))
             + self.s_qual.map_or(0, <[u8]>::len)
             + self.s_header.map_or(0, <[u8]>::len)
-            + self.x_seq.map_or(0, |q| q.len().div_ceil(32))
+            + self.x_seq.map_or(0, |q| q.len().div_ceil(4))
             + self.x_qual.map_or(0, <[u8]>::len)
             + self.x_header.map_or(0, <[u8]>::len)
             + self.flag.map_or(0, |f| f.to_le_bytes().len())
