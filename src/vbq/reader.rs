@@ -60,13 +60,13 @@ use memmap2::Mmap;
 use zstd::zstd_safe;
 
 use super::{
-    header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
     BlockHeader, BlockIndex, BlockRange, VBinseqHeader,
+    header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
-use crate::vbq::index::{IndexHeader, INDEX_END_MAGIC, INDEX_HEADER_SIZE};
+use crate::vbq::index::{INDEX_END_MAGIC, INDEX_HEADER_SIZE, IndexHeader};
 use crate::{
-    error::{ReadError, Result},
     BinseqRecord, ParallelProcessor, ParallelReader,
+    error::{ReadError, Result},
 };
 
 /// Calculates the number of 64-bit words needed to store a nucleotide sequence of the given length

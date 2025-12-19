@@ -61,15 +61,15 @@ use std::io::Write;
 
 use bitnuc::BitSize;
 use byteorder::{LittleEndian, WriteBytesExt};
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use zstd::stream::copy_encode;
 
 use super::header::{BlockHeader, VBinseqHeader};
 use crate::error::{Result, WriteError};
 use crate::policy::{Policy, RNG_SEED};
 use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
-use crate::vbq::index::{IndexHeader, INDEX_END_MAGIC};
+use crate::vbq::index::{INDEX_END_MAGIC, IndexHeader};
 use crate::vbq::{BlockIndex, BlockRange};
 
 /// Calculates the storage size in bytes required for a record without quality scores
@@ -1185,7 +1185,7 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vbq::{header::SIZE_HEADER, VBinseqHeaderBuilder};
+    use crate::vbq::{VBinseqHeaderBuilder, header::SIZE_HEADER};
 
     #[test]
     fn test_headless_writer() -> super::Result<()> {

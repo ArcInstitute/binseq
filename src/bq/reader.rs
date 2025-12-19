@@ -19,8 +19,8 @@ use memmap2::Mmap;
 
 use super::header::{BinseqHeader, SIZE_HEADER};
 use crate::{
-    error::{ReadError, Result},
     BinseqRecord, Error, ParallelProcessor, ParallelReader,
+    error::{ReadError, Result},
 };
 
 /// A reference to a binary sequence record in a memory-mapped file
