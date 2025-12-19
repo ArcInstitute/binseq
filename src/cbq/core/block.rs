@@ -260,68 +260,33 @@ impl ColumnarBlock {
     fn compress_columns(&mut self, cctx: &mut zstd_safe::CCtx) -> Result<()> {
         // compress sequence lengths
 
-        sized_compress(
-            &mut self.z_seq_len,
-            cast_slice(&self.l_seq),
-            self.header.compression_level,
-            cctx,
-        )?;
+        sized_compress(&mut self.z_seq_len, cast_slice(&self.l_seq), cctx)?;
 
         if !self.headers.is_empty() {
-            sized_compress(
-                &mut self.z_header_len,
-                cast_slice(&self.l_headers),
-                self.header.compression_level,
-                cctx,
-            )?;
+            sized_compress(&mut self.z_header_len, cast_slice(&self.l_headers), cctx)?;
         }
 
         // compress npos
         if !self.npos.is_empty() {
-            sized_compress(
-                &mut self.z_npos,
-                cast_slice(&self.npos),
-                self.header.compression_level,
-                cctx,
-            )?;
+            sized_compress(&mut self.z_npos, cast_slice(&self.npos), cctx)?;
         }
 
         // compress sequence
-        sized_compress(
-            &mut self.z_seq,
-            cast_slice(&self.ebuf),
-            self.header.compression_level,
-            cctx,
-        )?;
+        sized_compress(&mut self.z_seq, cast_slice(&self.ebuf), cctx)?;
 
         // compress flags
         if !self.flags.is_empty() {
-            sized_compress(
-                &mut self.z_flags,
-                cast_slice(&self.flags),
-                self.header.compression_level,
-                cctx,
-            )?;
+            sized_compress(&mut self.z_flags, cast_slice(&self.flags), cctx)?;
         }
 
         // compress headers
         if !self.headers.is_empty() {
-            sized_compress(
-                &mut self.z_headers,
-                cast_slice(&self.headers),
-                self.header.compression_level,
-                cctx,
-            )?;
+            sized_compress(&mut self.z_headers, cast_slice(&self.headers), cctx)?;
         }
 
         // compress quality
         if !self.qual.is_empty() {
-            sized_compress(
-                &mut self.z_qual,
-                cast_slice(&self.qual),
-                self.header.compression_level,
-                cctx,
-            )?;
+            sized_compress(&mut self.z_qual, cast_slice(&self.qual), cctx)?;
         }
 
         Ok(())

@@ -22,18 +22,32 @@ pub struct ColumnarBlockWriter<W: io::Write> {
 }
 impl<W: io::Write + Clone> Clone for ColumnarBlockWriter<W> {
     fn clone(&self) -> Self {
-        Self {
+        let mut writer = Self {
             inner: self.inner.clone(),
             block: self.block.clone(),
             headers: self.headers.clone(),
             cctx: zstd_safe::CCtx::create(),
-        }
+        };
+        writer
+            .set_compression_level()
+            .expect("Failed to set compression level in writer clone");
+        writer
     }
 }
 impl<W: io::Write> ColumnarBlockWriter<W> {
     /// Creates a new writer with the header written to the inner writer
     pub fn new(inner: W, header: FileHeader) -> Result<Self> {
         // Build the writer
+        let mut writer = Self::new_headless(inner, header)?;
+
+        // Ensure the header is written to the file
+        writer.inner.write_all(header.as_bytes())?;
+
+        Ok(writer)
+    }
+
+    /// Creates a new writer without writing the header to the inner writer
+    pub fn new_headless(inner: W, header: FileHeader) -> Result<Self> {
         let mut writer = Self {
             inner,
             block: ColumnarBlock::new(header),
@@ -41,10 +55,19 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
             cctx: zstd_safe::CCtx::create(),
         };
 
-        // Ensure the header is written to the file
-        writer.inner.write_all(header.as_bytes())?;
+        // Set the compression level for this writer
+        writer.set_compression_level()?;
 
         Ok(writer)
+    }
+
+    fn set_compression_level(&mut self) -> Result<()> {
+        self.cctx
+            .set_parameter(zstd_safe::CParameter::CompressionLevel(
+                self.block.header.compression_level as i32,
+            ))
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+        Ok(())
     }
 
     pub fn header(&self) -> FileHeader {
@@ -54,16 +77,6 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
     /// Calculate the usage of the block as a percentage
     pub fn usage(&self) -> f64 {
         self.block.usage()
-    }
-
-    /// Creates a new writer without writing the header to the inner writer
-    pub fn new_headless(inner: W, header: FileHeader) -> Self {
-        Self {
-            inner,
-            block: ColumnarBlock::new(header),
-            headers: Vec::default(),
-            cctx: zstd_safe::CCtx::create(),
-        }
     }
 
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {

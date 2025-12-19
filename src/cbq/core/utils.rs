@@ -6,7 +6,6 @@ use zstd::zstd_safe;
 pub(crate) fn sized_compress(
     dst: &mut Vec<u8>,
     src: &[u8],
-    level: u64,
     cctx: &mut zstd_safe::CCtx,
 ) -> Result<()> {
     // determine the maximum compressed size
@@ -20,7 +19,7 @@ pub(crate) fn sized_compress(
 
     // Compress the data using the provided compression context
     let true_size = cctx
-        .compress(dst, src, level as i32)
+        .compress2(dst, src)
         .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
 
     // resize to the true size - clipping all remaining uninitialized memory
