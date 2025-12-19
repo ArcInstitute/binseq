@@ -9,6 +9,8 @@
 //! It keeps the blocked structure of VBQ, but instead of interleaving the internal data of all records in the block, it stores each attribute in a separate column.
 //! Each of these columns are then ZSTD compressed and optionally decoded when reading.
 //!
+//! It was built to be performant, efficient, and lossless by default.
+//!
 //! This has a few benefits and advantages over VBQ:
 //!
 //! 1. Better compression ratios for each individual attribute.
