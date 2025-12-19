@@ -13,7 +13,7 @@ keywords = ["bioinformatics", "nucleotide", "sequencing", "genomics", "fastq"]
 [dependencies]
 anyhow = "1.0.100"
 auto_impl = "1.3.0"
-bitnuc = { git = "https://github.com/noamteyssier/bitnuc", branch = "allow-invalid-nucleotides" }
+bitnuc = "0.4.0"
 bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 byteorder = "1.5.0"
 itoa = "1.0.15"
