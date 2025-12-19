@@ -188,6 +188,21 @@ impl MmapReader {
             .decompress_from_bytes(block_data_slice, block_header, &mut self.dctx)?;
         Ok(())
     }
+
+    /// Iterate over block headers in the CBQ file.
+    ///
+    /// Note: This requires reading slices from the file so it will be IO-bound.
+    #[must_use]
+    pub fn iter_block_headers(&self) -> impl Iterator<Item = Result<BlockHeader>> {
+        self.index.iter_blocks().map(|range| {
+            let mut block_header_buf = [0u8; size_of::<BlockHeader>()];
+            block_header_buf.copy_from_slice(
+                &self.inner
+                    [range.offset as usize..range.offset as usize + size_of::<BlockHeader>()],
+            );
+            BlockHeader::from_bytes(&block_header_buf)
+        })
+    }
 }
 impl ParallelReader for MmapReader {
     fn process_parallel<P: ParallelProcessor + Clone + 'static>(
