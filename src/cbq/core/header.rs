@@ -127,7 +127,7 @@ impl FileHeader {
     }
 }
 
-/// A convenience struct for building a [FileHeader](crate::cbq::FileHeader) using a builder pattern.
+/// A convenience struct for building a [`FileHeader`](crate::cbq::FileHeader) using a builder pattern.
 #[derive(Default)]
 pub struct FileHeaderBuilder {
     compression_level: Option<usize>,

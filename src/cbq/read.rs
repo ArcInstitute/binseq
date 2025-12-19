@@ -194,7 +194,6 @@ impl MmapReader {
     /// Iterate over block headers in the CBQ file.
     ///
     /// Note: This requires reading slices from the file so it will be IO-bound.
-    #[must_use]
     pub fn iter_block_headers(&self) -> impl Iterator<Item = Result<BlockHeader>> {
         self.index.iter_blocks().map(|range| {
             let mut block_header_buf = [0u8; size_of::<BlockHeader>()];

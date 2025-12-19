@@ -6,7 +6,7 @@ use crate::{IntoBinseqError, Result, error::CbqError};
 
 use super::{BLOCK_MAGIC, ColumnarBlock};
 
-/// A block header for a [ColumnarBlock](crate::cbq::ColumnarBlock)
+/// A block header for a [`ColumnarBlock`](crate::cbq::ColumnarBlock)
 ///
 /// This is stored identically in memory and on disk.
 #[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq, Eq, Hash)]

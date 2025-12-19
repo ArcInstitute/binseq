@@ -79,6 +79,7 @@ pub struct ColumnarBlock {
 }
 impl ColumnarBlock {
     /// Create a new columnar block with the given block size
+    #[must_use]
     pub fn new(header: FileHeader) -> Self {
         Self {
             header,
@@ -175,6 +176,7 @@ impl ColumnarBlock {
     }
 
     /// Calculate the usage of the block as a percentage
+    #[must_use]
     pub fn usage(&self) -> f64 {
         self.current_size as f64 / self.header.block_size as f64
     }
@@ -614,6 +616,7 @@ impl ColumnarBlock {
         Ok(())
     }
 
+    #[must_use]
     pub fn iter_records(&self, range: BlockRange) -> RefRecordIter<'_> {
         RefRecordIter {
             block: self,
@@ -626,7 +629,7 @@ impl ColumnarBlock {
     }
 }
 
-/// A zero-copy iterator over [RefRecord](crate::cbq::RefRecord)s in a [ColumnarBlock](crate::cbq::ColumnarBlock)
+/// A zero-copy iterator over [`RefRecord`](crate::cbq::RefRecord)s in a [`ColumnarBlock`](crate::cbq::ColumnarBlock)
 pub struct RefRecordIter<'a> {
     /// The block containing the records
     block: &'a ColumnarBlock,
@@ -732,7 +735,7 @@ impl RefRecordIndex {
     }
 }
 
-/// A reference to a record in a [ColumnarBlock](crate::cbq::ColumnarBlock) that implements the [BinseqRecord](crate::BinseqRecord) trait
+/// A reference to a record in a [`ColumnarBlock`](crate::cbq::ColumnarBlock) that implements the [`BinseqRecord`](crate::BinseqRecord) trait
 #[derive(Clone, Copy)]
 pub struct RefRecord<'a> {
     /// A reference to the block containing this record

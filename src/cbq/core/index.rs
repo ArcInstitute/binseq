@@ -154,9 +154,8 @@ impl Index {
     #[must_use]
     pub fn average_block_size(&self) -> f64 {
         let mut block_iter = self.iter_blocks();
-        let mut last_block = match block_iter.next() {
-            Some(block) => block,
-            None => return 0.0,
+        let Some(mut last_block) = block_iter.next() else {
+            return 0.0;
         };
         let mut total_size = 0.0;
         let mut count = 0;

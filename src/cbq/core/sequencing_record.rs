@@ -1,6 +1,6 @@
 use crate::{Result, error::CbqError};
 
-/// A zero-copy record used to load sequences into a [ColumnarBlock](crate::cbq::ColumnarBlock).
+/// A zero-copy record used to load sequences into a [`ColumnarBlock`](crate::cbq::ColumnarBlock).
 #[derive(Clone, Copy, Default)]
 pub struct SequencingRecord<'a> {
     pub(crate) s_seq: &'a [u8],
@@ -69,7 +69,7 @@ impl<'a> SequencingRecord<'a> {
     }
 }
 
-/// A convenience builder struct for creating a [SequencingRecord]
+/// A convenience builder struct for creating a [`SequencingRecord`]
 #[derive(Default)]
 pub struct SequencingRecordBuilder<'a> {
     s_seq: Option<&'a [u8]>,
@@ -150,11 +150,11 @@ impl<'a> SequencingRecordBuilder<'a> {
 
 impl<'a> SequencingRecordBuilder<'a> {
     pub fn build(self) -> Result<SequencingRecord<'a>> {
-        if self.s_seq.is_none() {
+        let Some(s_seq) = self.s_seq else {
             return Err(CbqError::MissingSequenceOnSequencingRecord.into());
-        }
+        };
         Ok(SequencingRecord {
-            s_seq: self.s_seq.unwrap(),
+            s_seq,
             s_qual: self.s_qual,
             s_header: self.s_header,
             x_seq: self.x_seq,
