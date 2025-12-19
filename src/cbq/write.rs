@@ -29,7 +29,7 @@ impl<W: io::Write + Clone> Clone for ColumnarBlockWriter<W> {
             cctx: zstd_safe::CCtx::create(),
         };
         writer
-            .set_compression_level()
+            .init_compressor()
             .expect("Failed to set compression level in writer clone");
         writer
     }
@@ -56,16 +56,25 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         };
 
         // Set the compression level for this writer
-        writer.set_compression_level()?;
+        writer.init_compressor()?;
 
         Ok(writer)
     }
 
-    fn set_compression_level(&mut self) -> Result<()> {
+    /// Sets the compression level for Writer
+    ///
+    /// Note: only used on init, shouldn't be set by the user
+    fn init_compressor(&mut self) -> Result<()> {
+        // Initialize the compressor with the compression level
         self.cctx
             .set_parameter(zstd_safe::CParameter::CompressionLevel(
                 self.block.header.compression_level as i32,
             ))
+            .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+
+        // Set long distance matching
+        self.cctx
+            .set_parameter(zstd_safe::CParameter::EnableLongDistanceMatching(true))
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
         Ok(())
     }
