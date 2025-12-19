@@ -32,6 +32,7 @@ pub struct BlockHeader {
     pub num_records: u64,
 }
 impl BlockHeader {
+    #[must_use]
     pub fn from_block(block: &ColumnarBlock) -> Self {
         Self {
             magic: *BLOCK_MAGIC,
@@ -52,6 +53,7 @@ impl BlockHeader {
 
     /// Calculate the length of the block in bytes.
     #[allow(dead_code)]
+    #[must_use]
     pub fn block_len(&self) -> usize {
         (self.len_z_seq_len
             + self.len_z_header_len
@@ -62,6 +64,7 @@ impl BlockHeader {
             + self.len_z_qual) as usize
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }

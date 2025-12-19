@@ -2,12 +2,12 @@ use std::{
     fs::File,
     io::BufWriter,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use binseq::{
     bq::{self, BinseqHeaderBuilder},
     context::SeqCtx,

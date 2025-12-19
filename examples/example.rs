@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{stdout, BufWriter, Write};
+use std::io::{BufWriter, Write, stdout};
 use std::sync::Arc;
 
 use anyhow::Result;

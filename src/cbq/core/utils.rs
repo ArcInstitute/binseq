@@ -48,7 +48,7 @@ pub(crate) fn slice_and_increment<'a>(offset: &mut usize, len: u64, bytes: &'a [
 /// Resize a vector to the target length without initializing new elements.
 ///
 /// # Safety
-/// The caller must ensure that all elements in the range [old_len..new_len]
+/// The caller must ensure that all elements in the range [`old_len..new_len`]
 /// are initialized before reading them. This is safe when immediately followed
 /// by operations that write to the entire buffer (e.g., decompression).
 #[inline]

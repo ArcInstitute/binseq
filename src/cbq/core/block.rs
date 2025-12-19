@@ -135,7 +135,7 @@ impl ColumnarBlock {
 
     fn add_flag(&mut self, record: &SequencingRecord) {
         if let Some(flag) = record.flag {
-            self.flags.push(flag)
+            self.flags.push(flag);
         }
     }
 
@@ -287,7 +287,7 @@ impl ColumnarBlock {
                 if let Some(base) = self.seq.get_mut(idx) {
                     *base = b'N';
                 }
-            })
+            });
         }
     }
 
@@ -674,7 +674,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 rr_index,
             };
 
-            self.index += 1 + self.is_paired as usize;
+            self.index += 1 + usize::from(self.is_paired);
             Some(record)
         }
     }
@@ -728,7 +728,7 @@ pub struct RefRecord<'a> {
     /// A buffer to the name of this record when not storing headers
     rr_index: RefRecordIndex,
 }
-impl<'a> BinseqRecord for RefRecord<'a> {
+impl BinseqRecord for RefRecord<'_> {
     fn bitsize(&self) -> BitSize {
         BitSize::Two
     }

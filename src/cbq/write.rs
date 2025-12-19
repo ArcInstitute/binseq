@@ -159,6 +159,7 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
 
 /// Specialized implementation when using a local `Vec<u8>` as the inner data structure
 impl ColumnarBlockWriter<Vec<u8>> {
+    #[must_use]
     pub fn inner_data(&self) -> &[u8] {
         &self.inner
     }
@@ -170,6 +171,7 @@ impl ColumnarBlockWriter<Vec<u8>> {
     }
 
     /// Returns the number of bytes written to the inner data structure
+    #[must_use]
     pub fn bytes_written(&self) -> usize {
         self.inner.len()
     }

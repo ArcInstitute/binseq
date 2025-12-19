@@ -72,18 +72,22 @@ impl FileHeader {
     }
 
     #[inline]
+    #[must_use]
     pub fn is_paired(&self) -> bool {
         self.presence_flags & PRESENCE_PAIRED != 0
     }
     #[inline]
+    #[must_use]
     pub fn has_qualities(&self) -> bool {
         self.presence_flags & PRESENCE_QUALITIES != 0
     }
     #[inline]
+    #[must_use]
     pub fn has_headers(&self) -> bool {
         self.presence_flags & PRESENCE_HEADERS != 0
     }
     #[inline]
+    #[must_use]
     pub fn has_flags(&self) -> bool {
         self.presence_flags & PRESENCE_FLAGS != 0
     }
@@ -106,6 +110,7 @@ impl Display for FileHeader {
 }
 
 impl FileHeader {
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }
@@ -160,6 +165,7 @@ impl FileHeaderBuilder {
         self
     }
 
+    #[must_use]
     pub fn build(&self) -> FileHeader {
         let mut header = FileHeader {
             magic: *FILE_MAGIC,
@@ -176,25 +182,25 @@ impl FileHeaderBuilder {
 
         // default to unpaired
         if let Some(true) = self.is_paired {
-            header.set_paired()
+            header.set_paired();
         }
 
         // default to using headers
         match self.with_headers {
             Some(false) => {}
             _ => header.set_headers(),
-        };
+        }
 
         // default to not using flags
         if let Some(true) = self.with_flags {
-            header.set_flags()
-        };
+            header.set_flags();
+        }
 
         // default to using qualities
         match self.with_qualities {
             Some(false) => {}
             _ => header.set_qualities(),
-        };
+        }
 
         header
     }

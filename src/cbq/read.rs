@@ -35,14 +35,13 @@ impl<R: io::Read> Reader<R> {
 
         // Attempt to read the index header
         match self.inner.read_exact(&mut iheader_buf) {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(e) => {
                 if e.kind() == io::ErrorKind::UnexpectedEof {
                     // no more bytes, the stream is exhausted
                     return Ok(None);
-                } else {
-                    return Err(e.into());
                 }
+                return Err(e.into());
             }
         }
 
@@ -50,17 +49,16 @@ impl<R: io::Read> Reader<R> {
         if let Ok(iheader) = IndexHeader::from_bytes(&iheader_buf) {
             self.iheader = Some(iheader);
             return Ok(None);
-        } else {
-            // attempt to read the rest of the block header
-            match self.inner.read_exact(&mut diff_buf) {
-                Ok(_) => {}
-                Err(e) => {
-                    return Err(e.into());
-                }
-            }
-            header_buf[..iheader_buf.len()].copy_from_slice(&iheader_buf);
-            header_buf[iheader_buf.len()..].copy_from_slice(&diff_buf);
         }
+        // attempt to read the rest of the block header
+        match self.inner.read_exact(&mut diff_buf) {
+            Ok(()) => {}
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+        header_buf[..iheader_buf.len()].copy_from_slice(&iheader_buf);
+        header_buf[iheader_buf.len()..].copy_from_slice(&diff_buf);
 
         let header = BlockHeader::from_bytes(&header_buf)?;
         self.block.read_from(&mut self.inner, header)?;
@@ -150,10 +148,12 @@ impl MmapReader {
         })
     }
 
+    #[must_use]
     pub fn is_paired(&self) -> bool {
         self.block.header.is_paired()
     }
 
+    #[must_use]
     pub fn num_records(&self) -> usize {
         self.index.num_records()
     }

@@ -3,10 +3,10 @@ use std::{
     io::{BufReader, BufWriter},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use binseq::{
-    bq::{BinseqHeaderBuilder, BinseqWriterBuilder, MmapReader},
     BinseqRecord,
+    bq::{BinseqHeaderBuilder, BinseqWriterBuilder, MmapReader},
 };
 use seq_io::fastq::{Reader, Record};
 

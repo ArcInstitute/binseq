@@ -692,10 +692,10 @@ impl<R: Read> StreamReader<R> {
     /// * The data format is invalid
     pub fn next_record(&mut self) -> Option<Result<RefRecord<'_>>> {
         // Ensure header is read
-        if self.header.is_none() {
-            if let Some(e) = self.read_header().err() {
-                return Some(Err(e));
-            }
+        if self.header.is_none()
+            && let Some(e) = self.read_header().err()
+        {
+            return Some(Err(e));
         }
 
         let config = self

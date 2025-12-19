@@ -12,6 +12,7 @@ pub struct SequencingRecord<'a> {
 }
 impl<'a> SequencingRecord<'a> {
     #[inline]
+    #[must_use]
     pub fn new(
         s_seq: &'a [u8],
         s_qual: Option<&'a [u8]>,
@@ -34,29 +35,34 @@ impl<'a> SequencingRecord<'a> {
 
     /// Returns the size of the record in bytes
     #[inline]
+    #[must_use]
     pub fn size(&self) -> usize {
         (self.s_seq.len().div_ceil(32))
-            + self.s_qual.map_or(0, |q| q.len())
-            + self.s_header.map_or(0, |h| h.len())
+            + self.s_qual.map_or(0, <[u8]>::len)
+            + self.s_header.map_or(0, <[u8]>::len)
             + self.x_seq.map_or(0, |q| q.len().div_ceil(32))
-            + self.x_qual.map_or(0, |q| q.len())
-            + self.x_header.map_or(0, |h| h.len())
+            + self.x_qual.map_or(0, <[u8]>::len)
+            + self.x_header.map_or(0, <[u8]>::len)
             + self.flag.map_or(0, |f| f.to_le_bytes().len())
     }
 
     #[inline]
+    #[must_use]
     pub fn is_paired(&self) -> bool {
         self.x_seq.is_some()
     }
     #[inline]
+    #[must_use]
     pub fn has_flags(&self) -> bool {
         self.flag.is_some()
     }
     #[inline]
+    #[must_use]
     pub fn has_headers(&self) -> bool {
         self.s_header.is_some() || self.x_header.is_some()
     }
     #[inline]
+    #[must_use]
     pub fn has_qualities(&self) -> bool {
         self.s_qual.is_some() || self.x_qual.is_some()
     }
@@ -73,54 +79,67 @@ pub struct SequencingRecordBuilder<'a> {
     flag: Option<u64>,
 }
 impl<'a> SequencingRecordBuilder<'a> {
+    #[must_use]
     pub fn s_seq(mut self, s_seq: &'a [u8]) -> Self {
         self.s_seq = Some(s_seq);
         self
     }
+    #[must_use]
     pub fn s_qual(mut self, s_qual: &'a [u8]) -> Self {
         self.s_qual = Some(s_qual);
         self
     }
+    #[must_use]
     pub fn opt_s_qual(mut self, s_qual: Option<&'a [u8]>) -> Self {
         self.s_qual = s_qual;
         self
     }
+    #[must_use]
     pub fn s_header(mut self, s_header: &'a [u8]) -> Self {
         self.s_header = Some(s_header);
         self
     }
+    #[must_use]
     pub fn opt_s_header(mut self, s_header: Option<&'a [u8]>) -> Self {
         self.s_header = s_header;
         self
     }
+    #[must_use]
     pub fn x_seq(mut self, x_seq: &'a [u8]) -> Self {
         self.x_seq = Some(x_seq);
         self
     }
+    #[must_use]
     pub fn opt_x_seq(mut self, x_seq: Option<&'a [u8]>) -> Self {
         self.x_seq = x_seq;
         self
     }
+    #[must_use]
     pub fn x_qual(mut self, x_qual: &'a [u8]) -> Self {
         self.x_qual = Some(x_qual);
         self
     }
+    #[must_use]
     pub fn opt_x_qual(mut self, x_qual: Option<&'a [u8]>) -> Self {
         self.x_qual = x_qual;
         self
     }
+    #[must_use]
     pub fn x_header(mut self, x_header: &'a [u8]) -> Self {
         self.x_header = Some(x_header);
         self
     }
+    #[must_use]
     pub fn opt_x_header(mut self, x_header: Option<&'a [u8]>) -> Self {
         self.x_header = x_header;
         self
     }
+    #[must_use]
     pub fn flag(mut self, flag: u64) -> Self {
         self.flag = Some(flag);
         self
     }
+    #[must_use]
     pub fn opt_flag(mut self, flag: Option<u64>) -> Self {
         self.flag = flag;
         self
