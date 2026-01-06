@@ -268,14 +268,14 @@ impl ParallelReader for MmapReader {
                 .copied()
                 .collect::<Vec<_>>();
 
-            eprintln!(
-                "Thread {} block range: {}-{}. First block Cumulative Records: {}. Last block Cumulative Records: {}",
-                thread_id,
-                start_block_idx,
-                end_block_idx,
-                t_block_ranges[0].cumulative_records,
-                t_block_ranges.last().unwrap().cumulative_records
-            );
+            // eprintln!(
+            //     "Thread {} block range: {}-{}. First block Cumulative Records: {}. Last block Cumulative Records: {}",
+            //     thread_id,
+            //     start_block_idx,
+            //     end_block_idx,
+            //     t_block_ranges[0].cumulative_records,
+            //     t_block_ranges.last().unwrap().cumulative_records
+            // );
 
             let thread_handle = thread::spawn(move || -> crate::Result<()> {
                 for b_range in t_block_ranges {
