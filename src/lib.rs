@@ -93,6 +93,9 @@ mod record;
 /// VBQ - Variable length records, optional quality scores, compressed blocks
 pub mod vbq;
 
+/// CBQ - Columnar variable length records, optional quality scores and headers
+pub mod cbq;
+
 /// Prelude - Commonly used types and traits
 pub mod prelude;
 

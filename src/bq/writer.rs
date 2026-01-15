@@ -10,12 +10,12 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use rand::{rngs::SmallRng, SeedableRng};
+use rand::{SeedableRng, rngs::SmallRng};
 
 use super::BinseqHeader;
 use crate::{
-    error::{Result, WriteError},
     Policy, RNG_SEED,
+    error::{Result, WriteError},
 };
 
 /// Writes a single flag value to a writer in little-endian format

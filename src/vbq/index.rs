@@ -43,8 +43,8 @@ use byteorder::{ByteOrder, LittleEndian};
 use zstd::{Decoder, Encoder};
 
 use super::{
-    header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
     BlockHeader, VBinseqHeader,
+    header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
 use crate::error::{IndexError, Result};
 
