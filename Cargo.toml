@@ -16,7 +16,7 @@ auto_impl = "1.3.0"
 bitnuc = "0.4.0"
 bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 byteorder = "1.5.0"
-itoa = "1.0.15"
+itoa = "1.0.17"
 memchr = "2.7.6"
 memmap2 = "0.9.9"
 num_cpus = "1.17.0"
@@ -30,8 +30,6 @@ nucgen = "0.2.0"
 niffler = "3.0.0"
 seq_io = "0.3.4"
 parking_lot = "0.12.5"
-itoa = "1.0.15"
-memchr = "2.7.6"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
