@@ -10,9 +10,6 @@ use parking_lot::Mutex;
 /// A struct for decoding BINSEQ data back to FASTQ format.
 #[derive(Clone)]
 pub struct Decoder {
-    /// Reusable context
-    ctx: Ctx,
-
     /// local output buffer
     local_writer: Vec<u8>,
 
@@ -32,7 +29,6 @@ impl Decoder {
         let global_writer = Arc::new(Mutex::new(writer));
         Decoder {
             local_writer: Vec::new(),
-            ctx: Ctx::default(),
             local_count: 0,
             global_writer,
             global_count: Arc::new(Mutex::new(0)),
@@ -46,21 +42,20 @@ impl Decoder {
 }
 impl ParallelProcessor for Decoder {
     fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
-        self.ctx.fill(&record)?;
         write_fastq_parts(
             &mut self.local_writer,
-            self.ctx.sheader(),
-            self.ctx.sbuf(),
-            self.ctx.squal(),
+            record.sheader(),
+            record.sseq(),
+            record.squal(),
         )?;
 
         // write extended fastq to local buffer
         if record.is_paired() {
             write_fastq_parts(
                 &mut self.local_writer,
-                self.ctx.xheader(),
-                &self.ctx.xbuf(),
-                self.ctx.xqual(),
+                record.xheader(),
+                record.xseq(),
+                record.xqual(),
             )?;
         }
 

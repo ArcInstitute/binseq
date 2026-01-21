@@ -99,9 +99,6 @@ pub mod cbq;
 /// Prelude - Commonly used types and traits
 pub mod prelude;
 
-/// Context - Reusable state for parallel processing
-pub mod context;
-
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};

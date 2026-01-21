@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use binseq::{context::SeqCtx, prelude::*};
+use binseq::prelude::*;
 use memchr::memmem::Finder;
 use parking_lot::Mutex;
 
 #[derive(Clone)]
 pub struct GrepCounter {
     // (thread) local variables
-    ctx: SeqCtx,
     local_count: usize,
 
     // search pattern (using memchr::memmem::Finder for fast searching)
@@ -21,7 +20,6 @@ impl GrepCounter {
     #[must_use]
     pub fn new(pattern: &[u8]) -> Self {
         Self {
-            ctx: SeqCtx::default(),
             pattern: Finder::new(pattern).into_owned(),
             local_count: 0,
             count: Arc::new(Mutex::new(0)),
@@ -38,9 +36,7 @@ impl GrepCounter {
 }
 impl ParallelProcessor for GrepCounter {
     fn process_record<R: binseq::BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
-        self.ctx.fill(&record)?;
-
-        if self.match_sequence(&self.ctx.sbuf()) || self.match_sequence(&self.ctx.xbuf()) {
+        if self.match_sequence(&record.sseq()) || self.match_sequence(&record.xseq()) {
             self.local_count += 1;
         }
 
