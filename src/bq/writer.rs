@@ -132,6 +132,11 @@ impl Encoder {
         }
     }
 
+    /// Returns whether the header is paired-end.
+    pub fn is_paired(&self) -> bool {
+        self.header.is_paired()
+    }
+
     /// Encodes a single sequence as 2-bit.
     ///
     /// Will return `None` if the sequence is invalid and the policy does not allow correction.
@@ -349,6 +354,21 @@ impl<W: Write> BinseqWriter<W> {
             encoder: Encoder::with_policy(header, policy),
             headless,
         })
+    }
+
+    /// Returns whether the header is paired-end.
+    pub fn is_paired(&self) -> bool {
+        self.encoder.is_paired()
+    }
+
+    /// Returns the header of the writer
+    pub fn header(&self) -> BinseqHeader {
+        self.encoder.header
+    }
+
+    /// Returns the N-policy of the writer
+    pub fn policy(&self) -> Policy {
+        self.encoder.policy
     }
 
     /// Writes a single record to the output

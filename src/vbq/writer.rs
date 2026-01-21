@@ -418,6 +418,16 @@ impl<W: Write> VBinseqWriter<W> {
         self.header.paired
     }
 
+    /// Returns the header of the writer
+    pub fn header(&self) -> VBinseqHeader {
+        self.header
+    }
+
+    /// Returns the N-policy of the writer
+    pub fn policy(&self) -> Policy {
+        self.encoder.policy
+    }
+
     /// Checks if the writer is configured for quality scores
     ///
     /// This method returns whether the writer expects quality scores based on the

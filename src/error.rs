@@ -182,6 +182,20 @@ pub enum WriteError {
         expected: bool,
         actual: bool,
     },
+
+    #[error("Cannot ingest writer with incompatible formats")]
+    FormatMismatch,
+
+    #[error(
+        "Missing required sequence length, expected (primary: {exp_primary}, extended: {exp_extended}), got (primary: {obs_primary}, extended: {obs_extended})"
+    )]
+    MissingSequenceLength {
+        exp_primary: bool,
+        exp_extended: bool,
+        obs_primary: bool,
+        obs_extended: bool,
+    },
+
     /// The length of the sequence being written does not match what was specified in the header
     ///
     /// # Fields

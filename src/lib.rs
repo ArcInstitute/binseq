@@ -99,6 +99,9 @@ pub mod cbq;
 /// Prelude - Commonly used types and traits
 pub mod prelude;
 
+/// Write operations generic over the BINSEQ variant
+pub mod write;
+
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};
