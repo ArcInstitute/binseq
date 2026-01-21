@@ -8,6 +8,7 @@ use binseq::{
     SequencingRecordBuilder,
     write::{BinseqWriter, BinseqWriterBuilder, Format},
 };
+use bitnuc::BitSize;
 use clap::Parser;
 use paraseq::{
     Record, fastx,
@@ -53,6 +54,18 @@ struct Args {
     #[clap(short = 'H', long)]
     exclude_headers: bool,
 
+    /// Compression level for BINSEQ output (0: auto)
+    #[clap(long, default_value_t = 0)]
+    compression_level: i32,
+
+    /// Default BITSIZE for BINSEQ output (2: 2bit, 4: 4bit)
+    #[clap(long, default_value_t = 2)]
+    bitsize: u8,
+
+    /// Default BLOCKSIZE in KB for BINSEQ output (vbq,cbq)
+    #[clap(long, default_value_t = 128)]
+    blocksize: usize,
+
     /// Number of threads to use for parallel processing, 0: all available
     #[clap(short = 'T', long, default_value = "0")]
     threads: usize,
@@ -73,6 +86,12 @@ impl Args {
             } else {
                 Format::default()
             }
+        }
+    }
+    fn bitsize(&self) -> BitSize {
+        match self.bitsize {
+            4 => BitSize::Four,
+            _ => BitSize::Two,
         }
     }
 
@@ -184,26 +203,26 @@ fn encode_paired(args: &Args) -> Result<()> {
     let mut r1 = fastx::Reader::from_path(&args.input)?;
     let mut r2 = fastx::Reader::from_path(&args.input2.as_ref().expect("Missing input2"))?;
     let ohandle = args.ohandle()?;
-    let writer = match args.format() {
-        Format::Bq => {
-            let slen = get_seq_len(&mut r1)?;
-            let xlen = get_seq_len(&mut r2)?;
-            BinseqWriterBuilder::new(Format::Bq)
-                .slen(slen as u32)
-                .xlen(xlen as u32)
-                .build(ohandle)
+
+    // prepare writer
+    let writer = {
+        let format = args.format();
+        let mut builder = BinseqWriterBuilder::new(format)
+            .headers(!args.exclude_headers)
+            .quality(!args.exclude_quality)
+            .compression_level(args.compression_level)
+            .bitsize(args.bitsize())
+            .paired(true)
+            .block_size(args.blocksize * 1024);
+
+        // BQ requires a fixed sequence length from init time
+        if matches!(format, Format::Bq) {
+            builder = builder.slen(get_seq_len(&mut r1)? as u32);
+            builder = builder.xlen(get_seq_len(&mut r2)? as u32);
         }
-        Format::Vbq => BinseqWriterBuilder::new(Format::Vbq)
-            .headers(!args.exclude_headers)
-            .quality(!args.exclude_quality)
-            .paired(true)
-            .build(ohandle),
-        Format::Cbq => BinseqWriterBuilder::new(Format::Cbq)
-            .headers(!args.exclude_headers)
-            .quality(!args.exclude_quality)
-            .paired(true)
-            .build(ohandle),
-    }?;
+
+        builder.build(ohandle)?
+    };
 
     let mut encoder = Encoder::new(writer)?;
     r1.process_parallel_paired(r2, &mut encoder, args.threads)?;
@@ -216,22 +235,23 @@ fn encode_single(args: &Args) -> Result<()> {
     let mut reader = fastx::Reader::from_path(&args.input)?;
     let ohandle = args.ohandle()?;
 
-    let writer = match args.format() {
-        Format::Bq => {
-            let slen = get_seq_len(&mut reader)?;
-            BinseqWriterBuilder::new(Format::Bq)
-                .slen(slen as u32)
-                .build(ohandle)
+    // prepare writer
+    let writer = {
+        let format = args.format();
+        let mut builder = BinseqWriterBuilder::new(format)
+            .headers(!args.exclude_headers)
+            .quality(!args.exclude_quality)
+            .compression_level(args.compression_level)
+            .bitsize(args.bitsize())
+            .block_size(args.blocksize * 1024);
+
+        // BQ requires a fixed sequence length from init time
+        if matches!(format, Format::Bq) {
+            builder = builder.slen(get_seq_len(&mut reader)? as u32);
         }
-        Format::Vbq => BinseqWriterBuilder::new(Format::Vbq)
-            .headers(!args.exclude_headers)
-            .quality(!args.exclude_quality)
-            .build(ohandle),
-        Format::Cbq => BinseqWriterBuilder::new(Format::Cbq)
-            .headers(!args.exclude_headers)
-            .quality(!args.exclude_quality)
-            .build(ohandle),
-    }?;
+
+        builder.build(ohandle)?
+    };
 
     let mut encoder = Encoder::new(writer)?;
     reader.process_parallel(&mut encoder, args.threads)?;
