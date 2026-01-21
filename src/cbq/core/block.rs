@@ -9,7 +9,7 @@ use zstd::zstd_safe;
 
 use crate::cbq::core::utils::sized_compress;
 use crate::error::{CbqError, WriteError};
-use crate::{BinseqRecord, Result};
+use crate::{BinseqRecord, DEFAULT_QUALITY_SCORE, Result};
 
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
 use super::{BlockHeader, BlockRange, FileHeader, SequencingRecord};
@@ -72,6 +72,10 @@ pub struct ColumnarBlock {
     /// Current size of this block (virtual)
     current_size: usize,
 
+    /// Reusable buffer for missing quality scores
+    qbuf: Vec<u8>,
+    default_quality_score: u8,
+
     /// The file header (used for block configuration)
     ///
     /// Not to be confused with the `BlockHeader`
@@ -83,8 +87,15 @@ impl ColumnarBlock {
     pub fn new(header: FileHeader) -> Self {
         Self {
             header,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
             ..Default::default()
         }
+    }
+
+    /// Update the default quality score for this block
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
+        self.qbuf.clear();
     }
 
     fn is_empty(&self) -> bool {
@@ -495,6 +506,13 @@ impl ColumnarBlock {
                 slice_and_increment(&mut byte_offset, header.len_z_seq_len, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+
+            // update default quality score buffer size
+            self.l_seq.iter().for_each(|len| {
+                if *len as usize > self.qbuf.len() {
+                    self.qbuf.resize(*len as usize, self.default_quality_score);
+                }
+            })
         }
 
         // decompress header lengths
@@ -621,6 +639,7 @@ impl ColumnarBlock {
         RefRecordIter {
             block: self,
             range,
+            qbuf: &self.qbuf,
             index: 0,
             is_paired: self.header.is_paired(),
             has_headers: self.header.has_headers(),
@@ -645,6 +664,9 @@ pub struct RefRecordIter<'a> {
 
     /// Convenience attribute if block has headers
     has_headers: bool,
+
+    /// Preallocated buffer for quality scores
+    qbuf: &'a [u8],
 
     /// Preallocated itoa buffer for converting global record index to string
     header_buffer: itoa::Buffer,
@@ -698,6 +720,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
             let record = RefRecord {
                 block: self.block,
                 index: self.index,
+                qbuf: &self.qbuf,
                 global_index,
                 sseq_span,
                 sheader_span,
@@ -740,6 +763,9 @@ impl RefRecordIndex {
 pub struct RefRecord<'a> {
     /// A reference to the block containing this record
     block: &'a ColumnarBlock,
+
+    /// Preallocated buffer for quality scores
+    qbuf: &'a [u8],
 
     /// Local index of this record within the block
     index: usize,
@@ -838,7 +864,7 @@ impl BinseqRecord for RefRecord<'_> {
         if self.has_quality() {
             &self.block.qual[self.sseq_span.range()]
         } else {
-            &[]
+            &self.qbuf[..self.slen() as usize]
         }
     }
 
@@ -848,7 +874,7 @@ impl BinseqRecord for RefRecord<'_> {
         {
             &self.block.qual[span.range()]
         } else {
-            &[]
+            &self.qbuf[..self.xlen() as usize]
         }
     }
 }

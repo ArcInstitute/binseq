@@ -40,6 +40,14 @@ impl BinseqReader {
         }
     }
 
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        match self {
+            Self::Bq(reader) => reader.set_default_quality_score(score),
+            Self::Vbq(reader) => reader.set_default_quality_score(score),
+            Self::Cbq(reader) => reader.set_default_quality_score(score),
+        }
+    }
+
     #[must_use]
     pub fn is_paired(&self) -> bool {
         match self {

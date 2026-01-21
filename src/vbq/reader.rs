@@ -63,6 +63,7 @@ use super::{
     BlockHeader, BlockIndex, BlockRange, VBinseqHeader,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
+use crate::DEFAULT_QUALITY_SCORE;
 use crate::vbq::index::{INDEX_END_MAGIC, INDEX_HEADER_SIZE, IndexHeader};
 use crate::{
     BinseqRecord, ParallelProcessor, ParallelReader,
@@ -126,6 +127,9 @@ struct RecordMetadata {
     x_seq_span: Span,    // Encoded sequence words (u64s) (into `.sequences` buffer)
     x_qual_span: Span,   // Quality bytes
     x_header_span: Span, // Header bytes
+
+    /// Indicates whether the record has quality scores
+    has_quality: bool,
 }
 
 /// A container for a block of VBINSEQ records
@@ -179,6 +183,12 @@ pub struct RecordBlock {
 
     /// Reusable decoding buffer for the block
     dbuf: Vec<u8>,
+
+    /// Reusable buffer for quality scores for the block
+    qbuf: Vec<u8>,
+
+    /// Default quality score for the block
+    default_quality_score: u8,
 }
 impl RecordBlock {
     /// Creates a new empty `RecordBlock` with the specified block size
@@ -206,7 +216,19 @@ impl RecordBlock {
             rbuf: Vec::default(),
             dbuf: Vec::default(),
             dctx: zstd_safe::DCtx::create(),
+            qbuf: Vec::default(),
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         }
+    }
+
+    /// Sets the default quality score for the block
+    ///
+    /// # Parameters
+    ///
+    /// * `score` - Default quality score for the block
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
+        self.qbuf.clear();
     }
 
     /// Returns the number of records in this block
@@ -272,6 +294,7 @@ impl RecordBlock {
         self.sequences.clear();
         self.dbuf.clear();
         // Note: We keep rbuf allocated for reuse
+        // Note: We keep qbuf allocated for reuse
     }
 
     /// Ingest the bytes from a block into the record block
@@ -425,6 +448,14 @@ impl RecordBlock {
                 Span::new(0, 0)
             };
 
+            // Update qbuf size
+            if !has_quality {
+                let max_size = slen.max(xlen) as usize;
+                if self.qbuf.len() < max_size {
+                    self.qbuf.resize(max_size, self.default_quality_score);
+                }
+            }
+
             // Store the record metadata - all spans!
             self.records.push(RecordMetadata {
                 flag,
@@ -436,6 +467,7 @@ impl RecordBlock {
                 x_seq_span,
                 x_qual_span,
                 x_header_span,
+                has_quality,
             });
         }
     }
@@ -511,6 +543,7 @@ pub struct RecordBlockIter<'a> {
     block: &'a RecordBlock,
     pos: usize,
     header_buffer: itoa::Buffer,
+    qbuf: &'a [u8],
 }
 impl<'a> RecordBlockIter<'a> {
     #[must_use]
@@ -519,6 +552,7 @@ impl<'a> RecordBlockIter<'a> {
             block,
             pos: 0,
             header_buffer: itoa::Buffer::new(),
+            qbuf: &block.qbuf,
         }
     }
 }
@@ -542,6 +576,20 @@ impl<'a> Iterator for RecordBlockIter<'a> {
             header_buf[..header_len].copy_from_slice(header_str.as_bytes());
         }
 
+        let (squal, xqual) = if meta.has_quality {
+            // Record has quality scores, slice into rbuf using span
+            (
+                meta.s_qual_span.slice(&self.block.rbuf),
+                meta.x_qual_span.slice(&self.block.rbuf),
+            )
+        } else {
+            // Record does not have quality scores, use preallocated buffer for default scores
+            (
+                &self.qbuf[..meta.slen as usize],
+                &self.qbuf[..meta.xlen as usize],
+            )
+        };
+
         // increment position
         {
             self.pos += 1;
@@ -558,9 +606,10 @@ impl<'a> Iterator for RecordBlockIter<'a> {
             // Slice into sequences Vec using span
             sbuf: meta.s_seq_span.slice_u64(&self.block.sequences),
             xbuf: meta.x_seq_span.slice_u64(&self.block.sequences),
+            // Pass quality score buffers
+            squal,
+            xqual,
             // Slice into rbuf using span
-            squal: meta.s_qual_span.slice(&self.block.rbuf),
-            xqual: meta.x_qual_span.slice(&self.block.rbuf),
             sheader: meta.s_header_span.slice(&self.block.rbuf),
             xheader: meta.x_header_span.slice(&self.block.rbuf),
             header_buf,
@@ -760,6 +809,9 @@ pub struct MmapReader {
 
     /// Whether to decode sequences at once in each block
     decode_block: bool,
+
+    /// Default quality score for this reader
+    default_quality_score: u8,
 }
 impl MmapReader {
     /// Creates a new `MmapReader` for a VBINSEQ file
@@ -819,7 +871,12 @@ impl MmapReader {
             pos: SIZE_HEADER,
             total: 0,
             decode_block: true,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         })
+    }
+
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
     }
 
     /// Creates a new empty record block with the appropriate size for this file
@@ -841,7 +898,9 @@ impl MmapReader {
     /// ```
     #[must_use]
     pub fn new_block(&self) -> RecordBlock {
-        RecordBlock::new(self.header.bits, self.header.block as usize)
+        let mut block = RecordBlock::new(self.header.bits, self.header.block as usize);
+        block.set_default_quality_score(self.default_quality_score);
+        block
     }
 
     /// Sets whether to decode sequences at once in each block

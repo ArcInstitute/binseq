@@ -19,7 +19,7 @@ use memmap2::Mmap;
 
 use super::header::{BinseqHeader, SIZE_HEADER};
 use crate::{
-    BinseqRecord, Error, ParallelProcessor, ParallelReader,
+    BinseqRecord, DEFAULT_QUALITY_SCORE, Error, ParallelProcessor, ParallelReader,
     error::{ReadError, Result},
 };
 
@@ -39,6 +39,8 @@ pub struct RefRecord<'a> {
     id: u64,
     /// The underlying u64 buffer representing the record's binary data
     buffer: &'a [u64],
+    /// Reusable default quality buffer
+    qbuf: &'a [u8],
     /// The configuration that defines the layout and size of record components
     config: RecordConfig,
     /// Cached index string for the sequence header
@@ -59,11 +61,12 @@ impl<'a> RefRecord<'a> {
     ///
     /// Panics if the buffer length doesn't match the expected size from the config
     #[must_use]
-    pub fn new(id: u64, buffer: &'a [u64], config: RecordConfig) -> Self {
+    pub fn new(id: u64, buffer: &'a [u64], qbuf: &'a [u8], config: RecordConfig) -> Self {
         assert_eq!(buffer.len(), config.record_size_u64());
         Self {
             id,
             buffer,
+            qbuf,
             config,
             header_buf: [0; 20],
             header_len: 0,
@@ -127,6 +130,12 @@ impl BinseqRecord for RefRecord<'_> {
             &self.buffer[self.config.schunk as usize..]
         }
     }
+    fn squal(&self) -> &[u8] {
+        &self.qbuf[..self.config.slen as usize]
+    }
+    fn xqual(&self) -> &[u8] {
+        &self.qbuf[..self.config.xlen as usize]
+    }
 }
 
 /// A reference to a record in the map with a precomputed decoded buffer slice
@@ -139,6 +148,8 @@ pub struct BatchRecord<'a> {
     id: u64,
     /// The configuration that defines the layout and size of record components
     config: RecordConfig,
+    /// A reusable pre-initialized quality score buffer
+    qbuf: &'a [u8],
     /// Cached index string for the sequence header
     header_buf: [u8; 20],
     /// Length of the header in bytes
@@ -217,6 +228,12 @@ impl BinseqRecord for BatchRecord<'_> {
             rbound += scalar;
         }
         &self.dbuf[lbound..rbound]
+    }
+    fn squal(&self) -> &[u8] {
+        &self.qbuf[..self.config.slen()]
+    }
+    fn xqual(&self) -> &[u8] {
+        &self.qbuf[..self.config.xlen()]
     }
 }
 
@@ -398,6 +415,12 @@ pub struct MmapReader {
 
     /// Configuration defining the layout of records in the file
     config: RecordConfig,
+
+    /// Reusable buffer for quality scores
+    qbuf: Vec<u8>,
+
+    /// Default quality score for records without quality scores
+    default_quality_score: u8,
 }
 
 impl MmapReader {
@@ -443,10 +466,15 @@ impl MmapReader {
             return Err(ReadError::FileTruncation(mmap.len()).into());
         }
 
+        // preinitialize quality buffer
+        let qbuf = vec![DEFAULT_QUALITY_SCORE; header.slen.max(header.xlen) as usize];
+
         Ok(Self {
             mmap: Arc::new(mmap),
             header,
             config,
+            qbuf,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         })
     }
 
@@ -473,6 +501,17 @@ impl MmapReader {
         self.header.is_paired()
     }
 
+    /// Sets the default quality score for records without quality information
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
+        self.qbuf = self.build_qbuf();
+    }
+
+    /// Creates a new quality score buffer
+    pub fn build_qbuf(&self) -> Vec<u8> {
+        vec![self.default_quality_score; self.header.slen.max(self.header.xlen) as usize]
+    }
+
     /// Returns a reference to a specific record
     ///
     /// # Arguments
@@ -496,7 +535,7 @@ impl MmapReader {
         let rbound = lbound + rsize;
         let bytes = &self.mmap[lbound..rbound];
         let buffer = cast_slice(bytes);
-        Ok(RefRecord::new(idx as u64, buffer, self.config))
+        Ok(RefRecord::new(idx as u64, buffer, &self.qbuf, self.config))
     }
 
     /// Returns a slice of the buffer containing the underlying u64 for that range
@@ -539,6 +578,12 @@ pub struct StreamReader<R: Read> {
 
     /// Buffer for storing incoming data
     buffer: Vec<u8>,
+
+    /// Buffer for reusable quality scores
+    qbuf: Vec<u8>,
+
+    /// Default quality score for records without quality information
+    default_quality_score: u8,
 
     /// Current position in the buffer
     buffer_pos: usize,
@@ -583,10 +628,19 @@ impl<R: Read> StreamReader<R> {
             header: None,
             config: None,
             buffer: vec![0; capacity],
+            qbuf: vec![0; capacity],
             buffer_pos: 0,
             buffer_len: 0,
-            // buffer_capacity: capacity,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         }
+    }
+
+    /// Sets the default quality score for records without quality information
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        if score != self.default_quality_score {
+            self.qbuf.clear();
+        }
+        self.default_quality_score = score;
     }
 
     /// Reads and validates the header from the underlying reader
@@ -728,9 +782,20 @@ impl<R: Read> StreamReader<R> {
         let record_bytes = &self.buffer[record_start..record_start + record_size];
         let record_u64s = cast_slice(record_bytes);
 
+        // update quality score buffer if necessary
+        if self.qbuf.is_empty() {
+            let max_size = config.slen.max(config.xlen) as usize;
+            self.qbuf.resize(max_size, self.default_quality_score);
+        }
+
         // Create record with incremental ID (based on read position)
         let id = (record_start - SIZE_HEADER) / record_size;
-        Some(Ok(RefRecord::new(id as u64, record_u64s, config)))
+        Some(Ok(RefRecord::new(
+            id as u64,
+            record_u64s,
+            &self.qbuf,
+            config,
+        )))
     }
 
     /// Consumes the stream reader and returns the inner reader
@@ -849,6 +914,9 @@ impl ParallelReader for MmapReader {
                 // initialize a decoding buffer
                 let mut dbuf = Vec::new();
 
+                // initialize a quality score buffer
+                let qbuf = reader.build_qbuf();
+
                 // calculate the size of a record in the cast u64 slice
                 let rsize_u64 = reader.config.record_size_bytes() / 8;
 
@@ -895,6 +963,7 @@ impl ParallelReader for MmapReader {
                         let record = BatchRecord {
                             buffer: &ebuf[ebuf_start..(ebuf_start + rsize_u64)],
                             dbuf: &dbuf[dbuf_start..(dbuf_start + dbuf_rsize)],
+                            qbuf: &qbuf,
                             id: idx as u64,
                             config: reader.config,
                             header_buf,
