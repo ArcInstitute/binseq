@@ -25,6 +25,7 @@ fn server(header: BinseqHeader, sequence: &[u8]) -> Result<()> {
 
     // Write sequences in a loop
     for i in 0..10 {
+        #[allow(deprecated)]
         writer.write_record(Some(i), sequence)?;
         println!("Server: Sent record {i}");
 

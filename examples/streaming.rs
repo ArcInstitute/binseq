@@ -18,9 +18,11 @@ fn main() -> Result<()> {
         .build(Cursor::new(Vec::new()))?;
 
     // Write the sequence with flag 0
+    #[allow(deprecated)]
     writer.write_record(Some(0), &sequence)?;
 
     // Write the sequence with flag 1
+    #[allow(deprecated)]
     writer.write_record(Some(1), &sequence)?;
 
     // Flush and get the buffer
