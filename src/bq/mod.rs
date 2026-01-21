@@ -41,13 +41,10 @@
 //!
 //! ```rust
 //! use binseq::{bq, SequencingRecordBuilder};
-//! use std::fs::File;
+//! use std::io::Cursor;
 //!
-//! // Define a path for the output file
-//! let path = "./data/some_output.bq";
-//!
-//! // Create the file handle
-//! let output_handle = File::create(path).unwrap();
+//! // Create an in-memory buffer for output
+//! let output_handle = Cursor::new(Vec::new());
 //!
 //! // Initialize our BINSEQ header (64 bp, only primary)
 //! let header = bq::BinseqHeaderBuilder::new().slen(64).build().unwrap();
@@ -69,24 +66,18 @@
 //!     .unwrap();
 //! writer.push(record).unwrap();
 //!
-//! // Close the file
+//! // Flush the writer
 //! writer.flush().unwrap();
-//!
-//! // Remove the file created
-//! std::fs::remove_file(path).unwrap();
 //! ```
 //!
 //! #### Writing paired sequences
 //!
 //! ```rust
 //! use binseq::{bq, SequencingRecordBuilder};
-//! use std::fs::File;
+//! use std::io::Cursor;
 //!
-//! // Define a path for the output file
-//! let path = "./data/some_output.bq";
-//!
-//! // Create the file handle
-//! let output_handle = File::create(path).unwrap();
+//! // Create an in-memory buffer for output
+//! let output_handle = Cursor::new(Vec::new());
 //!
 //! // Initialize our BINSEQ header (64 bp and 128bp)
 //! let header = bq::BinseqHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
@@ -110,11 +101,8 @@
 //!     .unwrap();
 //! writer.push(record).unwrap();
 //!
-//! // Close the file
+//! // Flush the writer
 //! writer.flush().unwrap();
-//!
-//! // Remove the file created
-//! std::fs::remove_file(path).unwrap();
 //! ```
 //!
 //! # Example: Streaming Access
