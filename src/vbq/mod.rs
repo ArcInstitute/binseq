@@ -92,7 +92,7 @@
 //! use std::fs::File;
 //! use std::io::BufWriter;
 //! use binseq::vbq::{VBinseqHeaderBuilder, VBinseqWriterBuilder, MmapReader};
-//! use binseq::BinseqRecord;
+//! use binseq::{BinseqRecord, SequencingRecordBuilder};
 //!
 //! /*
 //!    WRITING
@@ -113,10 +113,13 @@
 //!     .unwrap();
 //!
 //! // Write a sequence with quality scores and header
-//! let sequence = b"ACGTACGT";
-//! let quality = b"IIIIFFFF";
-//! let header_str = b"sequence_001";
-//! writer.write_record(None, Some(header_str), sequence, Some(quality)).unwrap();
+//! let record = SequencingRecordBuilder::default()
+//!     .s_seq(b"ACGTACGT")
+//!     .s_qual(b"IIIIFFFF")
+//!     .s_header(b"sequence_001")
+//!     .build()
+//!     .unwrap();
+//! writer.push(record).unwrap();
 //! writer.finish().unwrap();
 //!
 //! /*

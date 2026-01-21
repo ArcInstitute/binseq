@@ -30,6 +30,7 @@
 //!
 //! ```rust,no_run
 //! use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+//! use binseq::SequencingRecordBuilder;
 //! use std::fs::File;
 //!
 //! // Create a VBINSEQ file writer with headers and compression
@@ -48,10 +49,14 @@
 //!     .unwrap();
 //!
 //! // Write a nucleotide sequence with quality scores and header
-//! let sequence = b"ACGTACGTACGT";
-//! let quality = b"IIIIIIIIIIII";
-//! let header_str = b"sequence_001";
-//! writer.write_record(Some(0), Some(header_str), sequence, Some(quality)).unwrap();
+//! let record = SequencingRecordBuilder::default()
+//!     .s_seq(b"ACGTACGTACGT")
+//!     .s_qual(b"IIIIIIIIIIII")
+//!     .s_header(b"sequence_001")
+//!     .flag(0)
+//!     .build()
+//!     .unwrap();
+//! writer.push(record).unwrap();
 //!
 //! // Must call finish() to write the embedded index
 //! writer.finish().unwrap();
@@ -303,6 +308,7 @@ impl VBinseqWriterBuilder {
 ///
 /// ```rust,no_run
 /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+/// use binseq::SequencingRecordBuilder;
 /// use std::fs::File;
 ///
 /// // Create a writer for single-end reads
@@ -313,8 +319,11 @@ impl VBinseqWriterBuilder {
 ///     .unwrap();
 ///
 /// // Write a sequence
-/// let sequence = b"ACGTACGTACGT";
-/// writer.write_record(None, None, sequence, None).unwrap();
+/// let record = SequencingRecordBuilder::default()
+///     .s_seq(b"ACGTACGTACGT")
+///     .build()
+///     .unwrap();
+/// writer.push(record).unwrap();
 ///
 /// // Writer automatically flushes when dropped
 /// ```
@@ -628,6 +637,7 @@ impl<W: Write> VBinseqWriter<W> {
     ///
     /// ```rust,no_run
     /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
     /// let file = File::create("example.vbq").unwrap();
@@ -636,8 +646,11 @@ impl<W: Write> VBinseqWriter<W> {
     ///     .unwrap();
     ///
     /// // Write some sequences...
-    /// let sequence = b"ACGTACGTACGT";
-    /// writer.write_record(None, None, sequence, None).unwrap();
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGTACGT")
+    ///     .build()
+    ///     .unwrap();
+    /// writer.push(record).unwrap();
     ///
     /// // Manually finish and check for errors
     /// if let Err(e) = writer.finish() {
@@ -698,6 +711,7 @@ impl<W: Write> VBinseqWriter<W> {
     ///
     /// ```rust,no_run
     /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
     /// // Create a file writer
@@ -712,7 +726,11 @@ impl<W: Write> VBinseqWriter<W> {
     ///     .unwrap();
     ///
     /// // Write some data to the memory writer
-    /// mem_writer.write_record(None, None, b"ACGTACGT", None).unwrap();
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGT")
+    ///     .build()
+    ///     .unwrap();
+    /// mem_writer.push(record).unwrap();
     ///
     /// // Ingest data from memory writer into file writer
     /// file_writer.ingest(&mut mem_writer).unwrap();
@@ -1186,6 +1204,7 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SequencingRecordBuilder;
     use crate::vbq::{VBinseqHeaderBuilder, header::SIZE_HEADER};
 
     #[test]
@@ -1245,13 +1264,11 @@ mod tests {
             .build(Vec::new())?;
 
         // Write a single sequence
-        let seq = b"ACGTACGTACGT";
-        source.write_record(
-            Some(1), // flag
-            None,    // header
-            seq,     // sequence
-            None,    // quality
-        )?;
+        let record = SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGTACGT")
+            .flag(1)
+            .build()?;
+        source.push(record)?;
 
         // We have not crossed a boundary
         assert!(source.by_ref().is_empty());
@@ -1297,8 +1314,11 @@ mod tests {
 
         // Write multiple sequences
         for _ in 0..30 {
-            let seq = b"ACGTACGTACGT";
-            source.write_record(Some(1), None, seq, None)?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(1)
+                .build()?;
+            source.push(record)?;
         }
         // We have not crossed a boundary
         assert!(source.by_ref().is_empty());
@@ -1344,8 +1364,11 @@ mod tests {
 
         // Write multiple sequences (will cross boundary)
         for _ in 0..30000 {
-            let seq = b"ACGTACGTACGT";
-            source.write_record(Some(1), None, seq, None)?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(1)
+                .build()?;
+            source.push(record)?;
         }
 
         // We have crossed a boundary
@@ -1392,11 +1415,15 @@ mod tests {
             .build(Vec::new())?;
 
         // Write sequences with quality scores
+        let seq = b"ACGTACGTACGT";
+        let qual = vec![40u8; seq.len()];
         for i in 0..5 {
-            let seq = b"ACGTACGTACGT";
-            // Simple quality scores (all the same for this test)
-            let qual = vec![40; seq.len()];
-            source.write_record(Some(i), None, seq, Some(&qual))?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(seq)
+                .s_qual(&qual)
+                .flag(i)
+                .build()?;
+            source.push(record)?;
         }
 
         // Create a destination writer
@@ -1432,8 +1459,11 @@ mod tests {
 
         // Write multiple sequences (will cross boundary)
         for _ in 0..30000 {
-            let seq = b"ACGTACGTACGT";
-            source.write_record(Some(1), None, seq, None)?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(1)
+                .build()?;
+            source.push(record)?;
         }
 
         // Create a destination writer
