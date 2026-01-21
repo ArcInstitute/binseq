@@ -59,7 +59,7 @@
 //! global.finish().unwrap();
 //! ```
 
-use std::io::Write;
+use std::{io::Write, str::FromStr};
 
 use crate::{BitSize, Policy, Result, SequencingRecord, bq, cbq, error::WriteError, vbq};
 
@@ -73,6 +73,17 @@ pub enum Format {
     /// CBQ format - columnar variable length records, optional quality scores
     #[default]
     Cbq,
+}
+impl FromStr for Format {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "bq" | "BQ" | "b" => Ok(Self::Bq),
+            "vbq" | "VBQ" | "v" => Ok(Self::Vbq),
+            "cbq" | "CBQ" | "c" => Ok(Self::Cbq),
+            _ => Err(format!("Unknown format: {}", s)),
+        }
+    }
 }
 
 impl Format {
@@ -251,7 +262,7 @@ impl BinseqWriterBuilder {
             obs_primary: self.slen.is_some(),
             obs_extended: self.xlen.is_some(),
         })?;
-        let xlen = if self.paired {
+        let xlen = if self.paired || self.xlen.is_some_and(|x| x > 0) {
             self.xlen.ok_or(WriteError::MissingSequenceLength {
                 exp_primary: true,
                 exp_extended: true,
