@@ -87,7 +87,7 @@ mod parallel;
 /// Invalid nucleotide policy
 mod policy;
 
-/// Record trait shared between BINSEQ variants
+/// Record types and traits shared between BINSEQ variants
 mod record;
 
 /// VBQ - Variable length records, optional quality scores, compressed blocks
@@ -102,7 +102,7 @@ pub mod prelude;
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};
-pub use record::BinseqRecord;
+pub use record::{BinseqRecord, SequencingRecord, SequencingRecordBuilder};
 
 /// Re-export `bitnuc::BitSize`
 pub use bitnuc::BitSize;

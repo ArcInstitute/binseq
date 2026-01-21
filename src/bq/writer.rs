@@ -14,7 +14,7 @@ use rand::{SeedableRng, rngs::SmallRng};
 
 use super::BinseqHeader;
 use crate::{
-    Policy, RNG_SEED,
+    Policy, RNG_SEED, SequencingRecord,
     error::{Result, WriteError},
 };
 
@@ -365,6 +365,7 @@ impl<W: Write> BinseqWriter<W> {
     /// * `Ok(true)` if the record was written successfully
     /// * `Ok(false)` if the record was not written because it was empty
     /// * `Err(WriteError::FlagSet)` if the flag is set but no flag value is provided
+    #[deprecated]
     pub fn write_record(&mut self, flag: Option<u64>, primary: &[u8]) -> Result<bool> {
         let has_flag = self.encoder.header.flags;
         if let Some(sbuffer) = self.encoder.encode_single(primary)? {
@@ -391,6 +392,7 @@ impl<W: Write> BinseqWriter<W> {
     ///
     /// # Returns
     /// * `Result<bool>` - A result indicating whether the write was successful or not
+    #[deprecated]
     pub fn write_paired_record(
         &mut self,
         flag: Option<u64>,
@@ -407,6 +409,78 @@ impl<W: Write> BinseqWriter<W> {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Writes a record using the unified [`SequencingRecord`] API
+    ///
+    /// This method provides a consistent interface with VBQ and CBQ writers.
+    /// Note that BQ format does not support quality scores or headers - these
+    /// fields from the record will be ignored.
+    ///
+    /// # Arguments
+    ///
+    /// * `record` - A [`SequencingRecord`] containing the sequence data to write
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if the record was written successfully
+    /// * `Ok(false)` if the record was skipped due to invalid nucleotides
+    /// * `Err(_)` if writing failed
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use binseq::bq::{BinseqHeaderBuilder, BinseqWriterBuilder};
+    /// # use binseq::{Result, SequencingRecordBuilder};
+    /// # fn main() -> Result<()> {
+    /// let header = BinseqHeaderBuilder::new().slen(8).build()?;
+    /// let mut writer = BinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(Vec::new())?;
+    ///
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGT")
+    ///     .flag(42)
+    ///     .build()?;
+    ///
+    /// writer.push(record)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
+        let has_flag = self.encoder.header.flags;
+        if has_flag {
+            write_flag(&mut self.inner, record.flag().unwrap_or(0))?;
+        }
+
+        if record.is_paired() != self.encoder.header.is_paired() {
+            return Err(WriteError::ConfigurationMismatch {
+                attribute: "paired",
+                expected: self.encoder.header.is_paired(),
+                actual: record.is_paired(),
+            }
+            .into());
+        }
+
+        if record.is_paired() {
+            if let Some((sbuffer, xbuffer)) = self
+                .encoder
+                .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
+            {
+                write_buffer(&mut self.inner, sbuffer)?;
+                write_buffer(&mut self.inner, xbuffer)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            if let Some(buffer) = self.encoder.encode_single(record.s_seq)? {
+                write_buffer(&mut self.inner, buffer)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
     }
 
@@ -570,17 +644,26 @@ impl<W: Write> StreamWriter<W> {
         Ok(Self { writer })
     }
 
+    #[deprecated(note = "use `push` method with SequencingRecord instead")]
     pub fn write_record(&mut self, flag: Option<u64>, primary: &[u8]) -> Result<bool> {
+        #[allow(deprecated)]
         self.writer.write_record(flag, primary)
     }
 
+    #[deprecated(note = "use `push` method with SequencingRecord instead")]
     pub fn write_paired_record(
         &mut self,
         flag: Option<u64>,
         primary: &[u8],
         extended: &[u8],
     ) -> Result<bool> {
+        #[allow(deprecated)]
         self.writer.write_paired_record(flag, primary, extended)
+    }
+
+    /// Writes a record using the unified [`SequencingRecord`] API
+    pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
+        self.writer.push(record)
     }
 
     /// Flushes any buffered data to the underlying writer

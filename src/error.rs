@@ -173,6 +173,15 @@ pub enum BuilderError {
 /// Errors that can occur while writing binary sequence data
 #[derive(thiserror::Error, Debug)]
 pub enum WriteError {
+    /// Error between configuration of writer and incoming sequencing record
+    #[error(
+        "Cannot push record ({attribute}: {actual}) with writer configuration ({attribute}: {expected})"
+    )]
+    ConfigurationMismatch {
+        attribute: &'static str,
+        expected: bool,
+        actual: bool,
+    },
     /// The length of the sequence being written does not match what was specified in the header
     ///
     /// # Fields
@@ -232,6 +241,10 @@ pub enum WriteError {
     /// The first parameter is the expected header, the second is the found header
     #[error("Incompatible headers found in VBinseqWriter::ingest. Found ({1:?}) Expected ({0:?})")]
     IncompatibleHeaders(crate::vbq::VBinseqHeader, crate::vbq::VBinseqHeader),
+
+    /// When building a SequencingRecord without a primary sequence
+    #[error("SequencingRecordBuilder requires a primary sequence (s_seq)")]
+    MissingSequence,
 }
 
 /// Errors related to VBINSEQ file indexing
@@ -301,15 +314,6 @@ pub enum CbqError {
         current_size: usize,
         record_size: usize,
         block_size: usize,
-    },
-
-    #[error(
-        "Cannot push record ({attribute}: {actual}) with block configuration ({attribute}: {expected})"
-    )]
-    ConfigurationMismatch {
-        attribute: &'static str,
-        expected: bool,
-        actual: bool,
     },
 
     #[error("Invalid block header MAGIC found")]

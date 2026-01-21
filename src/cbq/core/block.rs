@@ -12,7 +12,8 @@ use crate::error::{CbqError, WriteError};
 use crate::{BinseqRecord, DEFAULT_QUALITY_SCORE, Result};
 
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
-use super::{BlockHeader, BlockRange, FileHeader, SequencingRecord};
+use super::{BlockHeader, BlockRange, FileHeader};
+use crate::SequencingRecord;
 
 /// A block of records where all data is stored in separate columns.
 #[derive(Clone, Default)]
@@ -219,7 +220,7 @@ impl ColumnarBlock {
         }
 
         if record.is_paired() != self.header.is_paired() {
-            return Err(CbqError::ConfigurationMismatch {
+            return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
                 expected: self.header.is_paired(),
                 actual: record.is_paired(),
@@ -228,7 +229,7 @@ impl ColumnarBlock {
         }
 
         if record.has_flags() != self.header.has_flags() {
-            return Err(CbqError::ConfigurationMismatch {
+            return Err(WriteError::ConfigurationMismatch {
                 attribute: "flags",
                 expected: self.header.has_flags(),
                 actual: record.has_flags(),
@@ -237,7 +238,7 @@ impl ColumnarBlock {
         }
 
         if record.has_headers() != self.header.has_headers() {
-            return Err(CbqError::ConfigurationMismatch {
+            return Err(WriteError::ConfigurationMismatch {
                 attribute: "headers",
                 expected: self.header.has_headers(),
                 actual: record.has_headers(),
@@ -246,7 +247,7 @@ impl ColumnarBlock {
         }
 
         if record.has_qualities() != self.header.has_qualities() {
-            return Err(CbqError::ConfigurationMismatch {
+            return Err(WriteError::ConfigurationMismatch {
                 attribute: "qualities",
                 expected: self.header.has_qualities(),
                 actual: record.has_qualities(),

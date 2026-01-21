@@ -3,10 +3,8 @@ use std::io;
 use zstd::zstd_safe;
 
 use crate::{
-    Result,
-    cbq::core::{
-        BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader, SequencingRecord,
-    },
+    Result, SequencingRecord,
+    cbq::core::{BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader},
 };
 
 /// Writer for CBQ files operating on generic writers (streaming).
