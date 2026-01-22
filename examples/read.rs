@@ -4,15 +4,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use binseq::prelude::*;
+use clap::Parser;
 
 use parking_lot::Mutex;
 
 /// A struct for decoding BINSEQ data back to FASTQ format.
 #[derive(Clone)]
 pub struct Decoder {
-    /// Reusable context
-    ctx: Ctx,
-
     /// local output buffer
     local_writer: Vec<u8>,
 
@@ -32,7 +30,6 @@ impl Decoder {
         let global_writer = Arc::new(Mutex::new(writer));
         Decoder {
             local_writer: Vec::new(),
-            ctx: Ctx::default(),
             local_count: 0,
             global_writer,
             global_count: Arc::new(Mutex::new(0)),
@@ -46,21 +43,21 @@ impl Decoder {
 }
 impl ParallelProcessor for Decoder {
     fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
-        self.ctx.fill(&record)?;
+        // write primary fastq to local buffer
         write_fastq_parts(
             &mut self.local_writer,
-            self.ctx.sheader(),
-            self.ctx.sbuf(),
-            self.ctx.squal(),
+            record.sheader(),
+            record.sseq(),
+            record.squal(),
         )?;
 
         // write extended fastq to local buffer
         if record.is_paired() {
             write_fastq_parts(
                 &mut self.local_writer,
-                self.ctx.xheader(),
-                &self.ctx.xbuf(),
-                self.ctx.xqual(),
+                record.xheader(),
+                record.xseq(),
+                record.xqual(),
             )?;
         }
 
@@ -88,7 +85,6 @@ impl ParallelProcessor for Decoder {
     }
 }
 
-#[allow(clippy::missing_errors_doc)]
 pub fn write_fastq_parts<W: Write>(
     writer: &mut W,
     index: &[u8],
@@ -105,6 +101,7 @@ pub fn write_fastq_parts<W: Write>(
     Ok(())
 }
 
+/// Handle output file path generically (stdout / path)
 fn match_output(path: Option<&str>) -> Result<Box<dyn Write + Send>> {
     if let Some(path) = path {
         let writer = File::create(path).map(BufWriter::new)?;
@@ -115,18 +112,23 @@ fn match_output(path: Option<&str>) -> Result<Box<dyn Write + Send>> {
     }
 }
 
-fn main() -> Result<()> {
-    let file = std::env::args()
-        .nth(1)
-        .unwrap_or("./data/subset.bq".to_string());
-    let n_threads = std::env::args().nth(2).unwrap_or("1".to_string()).parse()?;
+#[derive(Parser)]
+struct Args {
+    /// Input BINSEQ path to decode
+    #[clap(required = true)]
+    input: String,
 
-    let reader = BinseqReader::new(&file)?;
+    /// Number of threads to use for decoding [0: auto]
+    #[clap(short = 'T', long, default_value_t = 0)]
+    threads: usize,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let reader = BinseqReader::new(&args.input)?;
     let writer = match_output(None)?;
     let proc = Decoder::new(writer);
-
-    reader.process_parallel(proc.clone(), n_threads)?;
+    reader.process_parallel(proc.clone(), args.threads)?;
     eprintln!("Read {} records", proc.num_records());
-
     Ok(())
 }

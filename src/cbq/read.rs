@@ -29,6 +29,11 @@ impl<R: io::Read> Reader<R> {
         })
     }
 
+    /// Update the default quality score for this reader
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.block.set_default_quality_score(score);
+    }
+
     pub fn read_block(&mut self) -> Result<Option<BlockHeader>> {
         let mut iheader_buf = [0u8; size_of::<IndexHeader>()];
         let mut diff_buf = [0u8; size_of::<BlockHeader>() - size_of::<IndexHeader>()];
@@ -148,6 +153,11 @@ impl MmapReader {
             block: ColumnarBlock::new(header),
             dctx: zstd_safe::DCtx::create(),
         })
+    }
+
+    /// Update the default quality score for this reader
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.block.set_default_quality_score(score);
     }
 
     #[must_use]

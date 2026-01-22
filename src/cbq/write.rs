@@ -3,10 +3,8 @@ use std::io;
 use zstd::zstd_safe;
 
 use crate::{
-    Result,
-    cbq::core::{
-        BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader, SequencingRecord,
-    },
+    Result, SequencingRecord,
+    cbq::core::{BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader},
 };
 
 /// Writer for CBQ files operating on generic writers (streaming).
@@ -91,12 +89,16 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         self.block.usage()
     }
 
-    pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
+    /// Push a record to the writer
+    ///
+    /// Returns `Ok(true)` if the record was written successfully.
+    /// CBQ handles N's explicitly in its encoding, so records are never skipped.
+    pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
         if !self.block.can_fit(&record) {
             self.flush()?;
         }
         self.block.push(record)?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn flush(&mut self) -> Result<()> {

@@ -1,7 +1,7 @@
 use auto_impl::auto_impl;
 use bitnuc::BitSize;
 
-use super::Result;
+use crate::Result;
 
 /// Record trait shared between BINSEQ variants.
 ///

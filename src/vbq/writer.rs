@@ -30,6 +30,7 @@
 //!
 //! ```rust,no_run
 //! use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+//! use binseq::SequencingRecordBuilder;
 //! use std::fs::File;
 //!
 //! // Create a VBINSEQ file writer with headers and compression
@@ -48,10 +49,14 @@
 //!     .unwrap();
 //!
 //! // Write a nucleotide sequence with quality scores and header
-//! let sequence = b"ACGTACGTACGT";
-//! let quality = b"IIIIIIIIIIII";
-//! let header_str = b"sequence_001";
-//! writer.write_record(Some(0), Some(header_str), sequence, Some(quality)).unwrap();
+//! let record = SequencingRecordBuilder::default()
+//!     .s_seq(b"ACGTACGTACGT")
+//!     .s_qual(b"IIIIIIIIIIII")
+//!     .s_header(b"sequence_001")
+//!     .flag(0)
+//!     .build()
+//!     .unwrap();
+//! writer.push(record).unwrap();
 //!
 //! // Must call finish() to write the embedded index
 //! writer.finish().unwrap();
@@ -66,6 +71,7 @@ use rand::rngs::SmallRng;
 use zstd::stream::copy_encode;
 
 use super::header::{BlockHeader, VBinseqHeader};
+use crate::SequencingRecord;
 use crate::error::{Result, WriteError};
 use crate::policy::{Policy, RNG_SEED};
 use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
@@ -302,6 +308,7 @@ impl VBinseqWriterBuilder {
 ///
 /// ```rust,no_run
 /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+/// use binseq::SequencingRecordBuilder;
 /// use std::fs::File;
 ///
 /// // Create a writer for single-end reads
@@ -312,8 +319,11 @@ impl VBinseqWriterBuilder {
 ///     .unwrap();
 ///
 /// // Write a sequence
-/// let sequence = b"ACGTACGTACGT";
-/// writer.write_record(None, None, sequence, None).unwrap();
+/// let record = SequencingRecordBuilder::default()
+///     .s_seq(b"ACGTACGTACGT")
+///     .build()
+///     .unwrap();
+/// writer.push(record).unwrap();
 ///
 /// // Writer automatically flushes when dropped
 /// ```
@@ -408,6 +418,16 @@ impl<W: Write> VBinseqWriter<W> {
         self.header.paired
     }
 
+    /// Returns the header of the writer
+    pub fn header(&self) -> VBinseqHeader {
+        self.header
+    }
+
+    /// Returns the N-policy of the writer
+    pub fn policy(&self) -> Policy {
+        self.encoder.policy
+    }
+
     /// Checks if the writer is configured for quality scores
     ///
     /// This method returns whether the writer expects quality scores based on the
@@ -445,6 +465,7 @@ impl<W: Write> VBinseqWriter<W> {
         self.header.headers
     }
 
+    #[deprecated(note = "use `push` method with SequencingRecord instead")]
     pub fn write_record(
         &mut self,
         flag: Option<u64>,
@@ -452,70 +473,11 @@ impl<W: Write> VBinseqWriter<W> {
         sequence: &[u8],
         quality: Option<&[u8]>,
     ) -> Result<bool> {
-        if self.is_paired() {
-            return Err(WriteError::PairedFlagSet.into());
-        }
-
-        // ignore the header if not set
-        let header = if header.is_none() && self.header.headers {
-            return Err(WriteError::HeaderFlagSet.into());
-        } else if header.is_some() && !self.header.headers {
-            None
-        } else {
-            header
-        };
-
-        // ignore the quality if not set
-        let quality = if quality.is_none() && self.header.qual {
-            return Err(WriteError::QualityFlagSet.into());
-        } else if quality.is_some() && !self.header.qual {
-            None
-        } else {
-            quality
-        };
-
-        // encode the sequence
-        if let Some(sbuffer) = self.encoder.encode_single(sequence)? {
-            let record_size = record_byte_size_quality_header(
-                sbuffer.len(),
-                0,
-                quality.map_or(0, <[u8]>::len),
-                0,
-                header.map_or(0, <[u8]>::len),
-                0,
-                self.header.flags,
-            );
-            if self.cblock.exceeds_block_size(record_size)? {
-                impl_flush_block(
-                    &mut self.inner,
-                    &mut self.cblock,
-                    &mut self.ranges,
-                    &mut self.bytes_written,
-                    &mut self.records_written,
-                )?;
-            }
-
-            // Write the flag, length, and sequence to the block
-            self.cblock.write_record(
-                flag,
-                sequence.len() as u64,
-                0,
-                sbuffer,
-                quality,
-                header,
-                None,
-                None,
-                None,
-            )?;
-
-            // Return true if the sequence was successfully written
-            Ok(true)
-        } else {
-            // Silently ignore sequences that fail encoding
-            Ok(false)
-        }
+        let record = SequencingRecord::new(sequence, quality, header, None, None, None, flag);
+        self.push(record)
     }
 
+    #[deprecated(note = "use `push` method with SequencingRecord instead")]
     pub fn write_paired_record(
         &mut self,
         flag: Option<u64>,
@@ -526,81 +488,146 @@ impl<W: Write> VBinseqWriter<W> {
         x_sequence: &[u8],
         x_qual: Option<&[u8]>,
     ) -> Result<bool> {
-        if !self.is_paired() {
-            return Err(WriteError::PairedFlagNotSet.into());
+        let record = SequencingRecord::new(
+            s_sequence,
+            s_qual,
+            s_header,
+            Some(x_sequence),
+            x_qual,
+            x_header,
+            flag,
+        );
+        self.push(record)
+    }
+
+    /// Writes a record using the unified [`SequencingRecord`] API
+    ///
+    /// This method provides a consistent interface with BQ and CBQ writers.
+    /// It automatically routes to either `write_record` or `write_paired_record`
+    /// based on whether the record contains paired data.
+    ///
+    /// # Arguments
+    ///
+    /// * `record` - A [`SequencingRecord`] containing the sequence data to write
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if the record was written successfully
+    /// * `Ok(false)` if the record was skipped due to invalid nucleotides
+    /// * `Err(_)` if writing failed
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+    /// use binseq::SequencingRecordBuilder;
+    /// use std::fs::File;
+    ///
+    /// let header = VBinseqHeaderBuilder::new()
+    ///     .qual(true)
+    ///     .headers(true)
+    ///     .build();
+    ///
+    /// let mut writer = VBinseqWriterBuilder::default()
+    ///     .header(header)
+    ///     .build(File::create("example.vbq").unwrap())
+    ///     .unwrap();
+    ///
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGT")
+    ///     .s_qual(b"IIIIFFFF")
+    ///     .s_header(b"seq_001")
+    ///     .flag(42)
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// writer.push(record).unwrap();
+    /// writer.finish().unwrap();
+    /// ```
+    pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
+        // Check configuration mismatches
+        if record.is_paired() != self.header.paired {
+            return Err(WriteError::ConfigurationMismatch {
+                attribute: "paired",
+                expected: self.header.paired,
+                actual: record.is_paired(),
+            }
+            .into());
+        }
+        if record.has_qualities() != self.header.qual {
+            return Err(WriteError::ConfigurationMismatch {
+                attribute: "qual",
+                expected: self.header.qual,
+                actual: record.has_qualities(),
+            }
+            .into());
+        }
+        if record.has_headers() != self.header.headers {
+            return Err(WriteError::ConfigurationMismatch {
+                attribute: "headers",
+                expected: self.header.headers,
+                actual: record.has_headers(),
+            }
+            .into());
         }
 
-        let s_header = if s_header.is_none() && self.header.headers {
-            return Err(WriteError::HeaderFlagSet.into());
-        } else if s_header.is_some() && !self.header.headers {
-            None
-        } else {
-            s_header
-        };
-        let x_header = if x_header.is_none() && self.header.headers {
-            return Err(WriteError::HeaderFlagSet.into());
-        } else if x_header.is_some() && !self.header.headers {
-            None
-        } else {
-            x_header
-        };
+        if record.is_paired() {
+            // encode the sequences
+            if let Some((sbuffer, xbuffer)) = self
+                .encoder
+                .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
+            {
+                let record_size = record_byte_size_quality_header(
+                    sbuffer.len(),
+                    xbuffer.len(),
+                    record.s_qual.map_or(0, <[u8]>::len),
+                    record.x_qual.map_or(0, <[u8]>::len),
+                    record.s_header.map_or(0, <[u8]>::len),
+                    record.x_header.map_or(0, <[u8]>::len),
+                    self.header.flags,
+                );
+                if self.cblock.exceeds_block_size(record_size)? {
+                    impl_flush_block(
+                        &mut self.inner,
+                        &mut self.cblock,
+                        &mut self.ranges,
+                        &mut self.bytes_written,
+                        &mut self.records_written,
+                    )?;
+                }
 
-        let s_qual = if s_qual.is_none() && self.header.qual {
-            return Err(WriteError::QualityFlagSet.into());
-        } else if s_qual.is_some() && !self.header.qual {
-            None
-        } else {
-            s_qual
-        };
-
-        let x_qual = if x_qual.is_none() && self.header.qual {
-            return Err(WriteError::QualityFlagSet.into());
-        } else if x_qual.is_some() && !self.header.qual {
-            None
-        } else {
-            x_qual
-        };
-
-        // encode the sequences
-        if let Some((sbuffer, xbuffer)) = self.encoder.encode_paired(s_sequence, x_sequence)? {
-            // Check if the current block can handle the next record
-            let record_size = record_byte_size_quality_header(
-                sbuffer.len(),
-                xbuffer.len(),
-                s_qual.map_or(0, <[u8]>::len),
-                x_qual.map_or(0, <[u8]>::len),
-                s_header.map_or(0, <[u8]>::len),
-                x_header.map_or(0, <[u8]>::len),
-                self.header.flags,
-            );
-            if self.cblock.exceeds_block_size(record_size)? {
-                impl_flush_block(
-                    &mut self.inner,
-                    &mut self.cblock,
-                    &mut self.ranges,
-                    &mut self.bytes_written,
-                    &mut self.records_written,
-                )?;
+                self.cblock.write_record(&record, sbuffer, Some(xbuffer))?;
+                Ok(true)
+            } else {
+                Ok(false)
             }
-
-            // Write the flag, length, sequence, and quality scores to the block
-            self.cblock.write_record(
-                flag,
-                s_sequence.len() as u64,
-                x_sequence.len() as u64,
-                sbuffer,
-                s_qual,
-                s_header,
-                Some(xbuffer),
-                x_qual,
-                x_header,
-            )?;
-
-            // Return true if the record was successfully written
-            Ok(true)
         } else {
-            // Return false if the record was not successfully written
-            Ok(false)
+            // encode the sequence
+            if let Some(sbuffer) = self.encoder.encode_single(record.s_seq)? {
+                let record_size = record_byte_size_quality_header(
+                    sbuffer.len(),
+                    0,
+                    record.s_qual.map_or(0, <[u8]>::len),
+                    0,
+                    record.s_header.map_or(0, <[u8]>::len),
+                    0,
+                    self.header.flags,
+                );
+                if self.cblock.exceeds_block_size(record_size)? {
+                    impl_flush_block(
+                        &mut self.inner,
+                        &mut self.cblock,
+                        &mut self.ranges,
+                        &mut self.bytes_written,
+                        &mut self.records_written,
+                    )?;
+                }
+
+                self.cblock.write_record(&record, sbuffer, None)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
     }
 
@@ -620,6 +647,7 @@ impl<W: Write> VBinseqWriter<W> {
     ///
     /// ```rust,no_run
     /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
     /// let file = File::create("example.vbq").unwrap();
@@ -628,8 +656,11 @@ impl<W: Write> VBinseqWriter<W> {
     ///     .unwrap();
     ///
     /// // Write some sequences...
-    /// let sequence = b"ACGTACGTACGT";
-    /// writer.write_record(None, None, sequence, None).unwrap();
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGTACGT")
+    ///     .build()
+    ///     .unwrap();
+    /// writer.push(record).unwrap();
     ///
     /// // Manually finish and check for errors
     /// if let Err(e) = writer.finish() {
@@ -690,6 +721,7 @@ impl<W: Write> VBinseqWriter<W> {
     ///
     /// ```rust,no_run
     /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
     /// // Create a file writer
@@ -704,7 +736,11 @@ impl<W: Write> VBinseqWriter<W> {
     ///     .unwrap();
     ///
     /// // Write some data to the memory writer
-    /// mem_writer.write_record(None, None, b"ACGTACGT", None).unwrap();
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGT")
+    ///     .build()
+    ///     .unwrap();
+    /// mem_writer.push(record).unwrap();
     ///
     /// // Ingest data from memory writer into file writer
     /// file_writer.ingest(&mut mem_writer).unwrap();
@@ -865,37 +901,30 @@ impl BlockWriter {
         Ok(self.pos + record_size > self.block_size)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn write_record(
         &mut self,
-        flag: Option<u64>,
-        slen: u64,
-        xlen: u64,
+        record: &SequencingRecord,
         sbuf: &[u64],
-        squal: Option<&[u8]>,
-        sheader: Option<&[u8]>,
         xbuf: Option<&[u64]>,
-        xqual: Option<&[u8]>,
-        xheader: Option<&[u8]>,
     ) -> Result<()> {
         // Tracks the record start position
         self.starts.push(self.pos);
 
         // Write the flag
         if self.has_flags {
-            self.write_flag(flag.unwrap_or(0))?;
+            self.write_flag(record.flag.unwrap_or(0))?;
         }
 
         // Write the lengths
-        self.write_length(slen)?;
-        self.write_length(xlen)?;
+        self.write_length(record.s_seq.len() as u64)?;
+        self.write_length(record.x_seq.map_or(0, <[u8]>::len) as u64)?;
 
         // Write the primary sequence and optional quality
         self.write_buffer(sbuf)?;
-        if let Some(qual) = squal {
+        if let Some(qual) = record.s_qual {
             self.write_u8buf(qual)?;
         }
-        if let Some(sheader) = sheader {
+        if let Some(sheader) = record.s_header {
             self.write_length(sheader.len() as u64)?;
             self.write_u8buf(sheader)?;
         }
@@ -904,10 +933,10 @@ impl BlockWriter {
         if let Some(xbuf) = xbuf {
             self.write_buffer(xbuf)?;
         }
-        if let Some(qual) = xqual {
+        if let Some(qual) = record.x_qual {
             self.write_u8buf(qual)?;
         }
-        if let Some(xheader) = xheader {
+        if let Some(xheader) = record.x_header {
             self.write_length(xheader.len() as u64)?;
             self.write_u8buf(xheader)?;
         }
@@ -1185,6 +1214,7 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SequencingRecordBuilder;
     use crate::vbq::{VBinseqHeaderBuilder, header::SIZE_HEADER};
 
     #[test]
@@ -1244,13 +1274,11 @@ mod tests {
             .build(Vec::new())?;
 
         // Write a single sequence
-        let seq = b"ACGTACGTACGT";
-        source.write_record(
-            Some(1), // flag
-            None,    // header
-            seq,     // sequence
-            None,    // quality
-        )?;
+        let record = SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGTACGT")
+            .flag(1)
+            .build()?;
+        source.push(record)?;
 
         // We have not crossed a boundary
         assert!(source.by_ref().is_empty());
@@ -1296,8 +1324,11 @@ mod tests {
 
         // Write multiple sequences
         for _ in 0..30 {
-            let seq = b"ACGTACGTACGT";
-            source.write_record(Some(1), None, seq, None)?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(1)
+                .build()?;
+            source.push(record)?;
         }
         // We have not crossed a boundary
         assert!(source.by_ref().is_empty());
@@ -1343,8 +1374,11 @@ mod tests {
 
         // Write multiple sequences (will cross boundary)
         for _ in 0..30000 {
-            let seq = b"ACGTACGTACGT";
-            source.write_record(Some(1), None, seq, None)?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(1)
+                .build()?;
+            source.push(record)?;
         }
 
         // We have crossed a boundary
@@ -1391,11 +1425,15 @@ mod tests {
             .build(Vec::new())?;
 
         // Write sequences with quality scores
+        let seq = b"ACGTACGTACGT";
+        let qual = vec![40u8; seq.len()];
         for i in 0..5 {
-            let seq = b"ACGTACGTACGT";
-            // Simple quality scores (all the same for this test)
-            let qual = vec![40; seq.len()];
-            source.write_record(Some(i), None, seq, Some(&qual))?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(seq)
+                .s_qual(&qual)
+                .flag(i)
+                .build()?;
+            source.push(record)?;
         }
 
         // Create a destination writer
@@ -1431,8 +1469,11 @@ mod tests {
 
         // Write multiple sequences (will cross boundary)
         for _ in 0..30000 {
-            let seq = b"ACGTACGTACGT";
-            source.write_record(Some(1), None, seq, None)?;
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(1)
+                .build()?;
+            source.push(record)?;
         }
 
         // Create a destination writer

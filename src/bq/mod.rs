@@ -40,14 +40,11 @@
 //! #### Writing unpaired sequences
 //!
 //! ```rust
-//! use binseq::bq;
-//! use std::fs::File;
+//! use binseq::{bq, SequencingRecordBuilder};
+//! use std::io::Cursor;
 //!
-//! // Define a path for the output file
-//! let path = "./data/some_output.bq";
-//!
-//! // Create the file handle
-//! let output_handle = File::create(path).unwrap();
+//! // Create an in-memory buffer for output
+//! let output_handle = Cursor::new(Vec::new());
 //!
 //! // Initialize our BINSEQ header (64 bp, only primary)
 //! let header = bq::BinseqHeaderBuilder::new().slen(64).build().unwrap();
@@ -60,29 +57,27 @@
 //!
 //! // Generate a random sequence
 //! let seq = [b'A'; 64];
-//! let flag = 0;
 //!
-//! // Write the sequence to the file
-//! writer.write_record(Some(flag), &seq).unwrap();
+//! // Build a record and write it to the file
+//! let record = SequencingRecordBuilder::default()
+//!     .s_seq(&seq)
+//!     .flag(0)
+//!     .build()
+//!     .unwrap();
+//! writer.push(record).unwrap();
 //!
-//! // Close the file
+//! // Flush the writer
 //! writer.flush().unwrap();
-//!
-//! // Remove the file created
-//! std::fs::remove_file(path).unwrap();
 //! ```
 //!
 //! #### Writing paired sequences
 //!
 //! ```rust
-//! use binseq::bq;
-//! use std::fs::File;
+//! use binseq::{bq, SequencingRecordBuilder};
+//! use std::io::Cursor;
 //!
-//! // Define a path for the output file
-//! let path = "./data/some_output.bq";
-//!
-//! // Create the file handle
-//! let output_handle = File::create(path).unwrap();
+//! // Create an in-memory buffer for output
+//! let output_handle = Cursor::new(Vec::new());
 //!
 //! // Initialize our BINSEQ header (64 bp and 128bp)
 //! let header = bq::BinseqHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
@@ -93,25 +88,27 @@
 //!     .build(output_handle)
 //!     .unwrap();
 //!
-//! // Generate a random sequence
+//! // Generate paired sequences
 //! let primary = [b'A'; 64];
 //! let secondary = [b'C'; 128];
-//! let flag = 0;
 //!
-//! // Write the sequence to the file
-//! writer.write_paired_record(Some(flag), &primary, &secondary).unwrap();
+//! // Build a paired record and write it to the file
+//! let record = SequencingRecordBuilder::default()
+//!     .s_seq(&primary)
+//!     .x_seq(&secondary)
+//!     .flag(0)
+//!     .build()
+//!     .unwrap();
+//! writer.push(record).unwrap();
 //!
-//! // Close the file
+//! // Flush the writer
 //! writer.flush().unwrap();
-//!
-//! // Remove the file created
-//! std::fs::remove_file(path).unwrap();
 //! ```
 //!
 //! # Example: Streaming Access
 //!
 //! ```
-//! use binseq::{Policy, Result, BinseqRecord};
+//! use binseq::{Policy, Result, BinseqRecord, SequencingRecordBuilder};
 //! use binseq::bq::{BinseqHeaderBuilder, StreamReader, StreamWriterBuilder};
 //! use std::io::{BufReader, Cursor};
 //!
@@ -127,7 +124,11 @@
 //!
 //!     // Write sequences
 //!     let sequence = b"ACGT".repeat(25); // 100 nucleotides
-//!     writer.write_record(Some(0), &sequence)?;
+//!     let record = SequencingRecordBuilder::default()
+//!         .s_seq(&sequence)
+//!         .flag(0)
+//!         .build()?;
+//!     writer.push(record)?;
 //!
 //!     // Get the inner buffer
 //!     let buffer = writer.into_inner()?;

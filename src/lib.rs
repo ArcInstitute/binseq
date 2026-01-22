@@ -14,6 +14,7 @@
 //! - Optional sequence headers/identifiers (VBQ format)
 //! - Abstract [`BinseqRecord`] trait for representing records from both `.bq` and `.vbq` files.
 //! - Abstract [`BinseqReader`] enum for processing records from both `.bq` and `.vbq` files.
+//! - Abstract [`BinseqWriter`] enum for writing records to both `.bq`, `.vbq`, and `.cbq` files.
 //!
 //! ## Recent VBQ Format Changes (v0.7.0+)
 //!
@@ -87,7 +88,7 @@ mod parallel;
 /// Invalid nucleotide policy
 mod policy;
 
-/// Record trait shared between BINSEQ variants
+/// Record types and traits shared between BINSEQ variants
 mod record;
 
 /// VBQ - Variable length records, optional quality scores, compressed blocks
@@ -99,13 +100,17 @@ pub mod cbq;
 /// Prelude - Commonly used types and traits
 pub mod prelude;
 
-/// Context - Reusable state for parallel processing
-pub mod context;
+/// Write operations generic over the BINSEQ variant
+pub mod write;
 
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};
-pub use record::BinseqRecord;
+pub use record::{BinseqRecord, SequencingRecord, SequencingRecordBuilder};
+pub use write::{BinseqWriter, BinseqWriterBuilder};
 
 /// Re-export `bitnuc::BitSize`
 pub use bitnuc::BitSize;
+
+/// Default quality score for BINSEQ readers without quality scores
+pub(crate) const DEFAULT_QUALITY_SCORE: u8 = b'?';

@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use binseq::{context::SeqCtx, prelude::*};
+use binseq::prelude::*;
+use clap::Parser;
 use memchr::memmem::Finder;
 use parking_lot::Mutex;
 
 #[derive(Clone)]
 pub struct GrepCounter {
     // (thread) local variables
-    ctx: SeqCtx,
     local_count: usize,
 
     // search pattern (using memchr::memmem::Finder for fast searching)
@@ -21,7 +21,6 @@ impl GrepCounter {
     #[must_use]
     pub fn new(pattern: &[u8]) -> Self {
         Self {
-            ctx: SeqCtx::default(),
             pattern: Finder::new(pattern).into_owned(),
             local_count: 0,
             count: Arc::new(Mutex::new(0)),
@@ -38,9 +37,7 @@ impl GrepCounter {
 }
 impl ParallelProcessor for GrepCounter {
     fn process_record<R: binseq::BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
-        self.ctx.fill(&record)?;
-
-        if self.match_sequence(&self.ctx.sbuf()) || self.match_sequence(&self.ctx.xbuf()) {
+        if self.match_sequence(&record.sseq()) || self.match_sequence(&record.xseq()) {
             self.local_count += 1;
         }
 
@@ -54,21 +51,26 @@ impl ParallelProcessor for GrepCounter {
     }
 }
 
+#[derive(Parser)]
+struct Args {
+    /// Input BINSEQ path to grep
+    #[clap(required = true)]
+    input: String,
+
+    /// Pattern to search for (either sseq or xseq)
+    #[clap(required = true)]
+    pattern: String,
+
+    /// Threads to use [0: auto]
+    #[clap(short = 'T', long, default_value_t = 0)]
+    threads: usize,
+}
+
 fn main() -> Result<()> {
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or("./data/subset.bq".to_string());
-    let pattern = std::env::args()
-        .nth(2)
-        .unwrap_or("ACGT".to_string())
-        .as_bytes()
-        .to_vec();
-    let n_threads = std::env::args().nth(3).unwrap_or("1".to_string()).parse()?;
-
-    let reader = BinseqReader::new(&path)?;
-    let counter = GrepCounter::new(&pattern);
-    reader.process_parallel(counter.clone(), n_threads)?;
+    let args = Args::parse();
+    let reader = BinseqReader::new(&args.input)?;
+    let counter = GrepCounter::new(args.pattern.as_bytes());
+    reader.process_parallel(counter.clone(), args.threads)?;
     counter.pprint();
-
     Ok(())
 }
