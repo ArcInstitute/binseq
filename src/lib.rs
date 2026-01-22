@@ -103,6 +103,9 @@ pub mod prelude;
 /// Write operations generic over the BINSEQ variant
 pub mod write;
 
+/// Utilities for working with BINSEQ files
+pub mod utils;
+
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};

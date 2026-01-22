@@ -1,4 +1,4 @@
-use crate::{Result, error::WriteError};
+use crate::{BitSize, Result, error::WriteError};
 
 /// A zero-copy record used to write sequences to binary sequence files.
 ///
@@ -101,17 +101,133 @@ impl<'a> SequencingRecord<'a> {
         self.flag
     }
 
-    /// Returns the size of the record in bytes (used for CBQ block capacity)
+    /// Returns the configured size of this record for CBQ format.
+    ///
+    /// CBQ uses columnar storage so there are no per-record length prefixes.
+    /// This calculates the size based on writer configuration, ignoring any
+    /// extra data in the record that the writer won't use.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> usize {
-        (self.s_seq.len().div_ceil(4))
-            + self.s_qual.map_or(0, <[u8]>::len)
-            + self.s_header.map_or(0, <[u8]>::len)
-            + self.x_seq.map_or(0, |q| q.len().div_ceil(4))
-            + self.x_qual.map_or(0, <[u8]>::len)
-            + self.x_header.map_or(0, <[u8]>::len)
-            + self.flag.map_or(0, |f| f.to_le_bytes().len())
+    pub fn configured_size_cbq(
+        &self,
+        is_paired: bool,
+        has_flags: bool,
+        has_headers: bool,
+        has_qualities: bool,
+    ) -> usize {
+        // CBQ uses 2-bit encoding: 4 nucleotides per byte, 32 per u64 word
+        const NUCS_PER_WORD: usize = 32;
+
+        let mut size = 0;
+
+        // Sequence size (encoded into u64 words)
+        let s_chunks = self.s_seq.len().div_ceil(NUCS_PER_WORD);
+        size += s_chunks * 8;
+
+        // Extended sequence (only if writer is configured for paired)
+        if is_paired {
+            let x_chunks = self.x_seq.map_or(0, |x| x.len().div_ceil(NUCS_PER_WORD));
+            size += x_chunks * 8;
+        }
+
+        // Flag size (only if writer is configured for flags)
+        if has_flags {
+            size += 8; // u64
+        }
+
+        // Header size (only if writer is configured for headers)
+        if has_headers {
+            size += self.s_header.map_or(0, <[u8]>::len);
+            if is_paired {
+                size += self.x_header.map_or(0, <[u8]>::len);
+            }
+        }
+
+        // Quality size (only if writer is configured for qualities)
+        if has_qualities {
+            size += self.s_qual.map_or(0, <[u8]>::len);
+            if is_paired {
+                size += self.x_qual.map_or(0, <[u8]>::len);
+            }
+        }
+
+        size
+    }
+
+    /// Returns the configured size of this record for VBQ format.
+    ///
+    /// VBQ uses a row-based format with length prefixes for each field.
+    /// This calculates the size based on writer configuration, ignoring any
+    /// extra data in the record that the writer won't use.
+    ///
+    /// The VBQ record layout is:
+    /// - Flag (8 bytes, if `has_flags`)
+    /// - `s_len` (8 bytes)
+    /// - `x_len` (8 bytes)
+    /// - `s_seq` (encoded, rounded up to 8-byte words)
+    /// - `s_qual` (raw bytes, if `has_qualities`)
+    /// - `s_header_len` + `s_header` (8 + len bytes, if `has_headers` and `s_header` present)
+    /// - `x_seq` (encoded, rounded up to 8-byte words, if paired)
+    /// - `x_qual` (raw bytes, if `has_qualities` and paired)
+    /// - `x_header_len` + `x_header` (8 + len bytes, if `has_headers` and `x_header` present)
+    #[inline]
+    #[must_use]
+    pub fn configured_size_vbq(
+        &self,
+        is_paired: bool,
+        has_flags: bool,
+        has_headers: bool,
+        has_qualities: bool,
+        bitsize: BitSize,
+    ) -> usize {
+        // Calculate how many nucleotides fit per byte for the given bitsize
+        let nucs_per_byte = if matches!(bitsize, BitSize::Two) {
+            4
+        } else {
+            2
+        };
+        // VBQ packs sequences into u64 words
+        let nucs_per_word = nucs_per_byte * 8;
+
+        let mut size = 0;
+
+        // Length prefixes: s_len and x_len (always present)
+        size += 16; // 2 * u64
+
+        // Flag (8 bytes, if has_flags)
+        if has_flags {
+            size += 8;
+        }
+
+        // Primary sequence (encoded into u64 words)
+        let s_chunks = self.s_seq.len().div_ceil(nucs_per_word);
+        size += s_chunks * 8;
+
+        // Extended sequence (only if writer is configured for paired)
+        if is_paired {
+            let x_chunks = self.x_seq.map_or(0, |x| x.len().div_ceil(nucs_per_word));
+            size += x_chunks * 8;
+        }
+
+        // Quality scores (raw bytes, only if writer configured for qualities)
+        if has_qualities {
+            size += self.s_qual.map_or(0, <[u8]>::len);
+            if is_paired {
+                size += self.x_qual.map_or(0, <[u8]>::len);
+            }
+        }
+
+        // Headers (length prefix + raw bytes, only if writer configured for headers)
+        if has_headers {
+            if let Some(h) = self.s_header {
+                size += 8 + h.len(); // length prefix + header bytes
+            }
+            if is_paired && let Some(h) = self.x_header {
+                size += 8 + h.len(); // length prefix + header bytes
+            }
+        }
+
+        size
     }
 
     #[inline]

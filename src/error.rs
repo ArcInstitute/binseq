@@ -48,12 +48,17 @@ pub enum Error {
     BitnucError(#[from] bitnuc::Error),
 
     /// Conversion errors from anyhow errors
+    #[cfg(feature = "anyhow")]
     #[error("Generic error: {0}")]
     AnyhowError(#[from] anyhow::Error),
 
     /// Generic errors for other unexpected situations
     #[error("Generic error: {0}")]
     GenericError(#[from] Box<dyn StdError + Send + Sync>),
+
+    #[cfg(feature = "paraseq")]
+    #[error("Fastx encoding error: {0}")]
+    FastxEncodingError(#[from] FastxEncodingError),
 }
 impl Error {
     /// Checks if the error is an index mismatch error
@@ -347,6 +352,16 @@ pub enum CbqError {
 
     #[error("SequenceRecordBuilder failed on build due to missing primary sequence (`s_seq`)")]
     MissingSequenceOnSequencingRecord,
+}
+
+#[cfg(feature = "paraseq")]
+#[derive(thiserror::Error, Debug)]
+pub enum FastxEncodingError {
+    #[error("Empty FASTX file")]
+    EmptyFastxFile,
+
+    #[error("Builder not provided with any input")]
+    MissingInput,
 }
 
 #[derive(thiserror::Error, Debug)]
