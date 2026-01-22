@@ -897,18 +897,18 @@ impl BlockWriter {
         self.write_buffer(sbuf)?;
 
         // Write primary quality (only if configured)
-        if self.has_qualities {
-            if let Some(qual) = record.s_qual {
-                self.write_u8buf(qual)?;
-            }
+        if self.has_qualities
+            && let Some(qual) = record.s_qual
+        {
+            self.write_u8buf(qual)?;
         }
 
         // Write primary header (only if configured)
-        if self.has_headers {
-            if let Some(sheader) = record.s_header {
-                self.write_length(sheader.len() as u64)?;
-                self.write_u8buf(sheader)?;
-            }
+        if self.has_headers
+            && let Some(sheader) = record.s_header
+        {
+            self.write_length(sheader.len() as u64)?;
+            self.write_u8buf(sheader)?;
         }
 
         // Write the optional extended sequence
@@ -917,18 +917,18 @@ impl BlockWriter {
         }
 
         // Write extended quality (only if configured)
-        if self.has_qualities {
-            if let Some(qual) = record.x_qual {
-                self.write_u8buf(qual)?;
-            }
+        if self.has_qualities
+            && let Some(qual) = record.x_qual
+        {
+            self.write_u8buf(qual)?;
         }
 
         // Write extended header (only if configured)
-        if self.has_headers {
-            if let Some(xheader) = record.x_header {
-                self.write_length(xheader.len() as u64)?;
-                self.write_u8buf(xheader)?;
-            }
+        if self.has_headers
+            && let Some(xheader) = record.x_header
+        {
+            self.write_length(xheader.len() as u64)?;
+            self.write_u8buf(xheader)?;
         }
 
         Ok(())

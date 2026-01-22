@@ -161,15 +161,15 @@ impl<'a> SequencingRecord<'a> {
     /// extra data in the record that the writer won't use.
     ///
     /// The VBQ record layout is:
-    /// - Flag (8 bytes, if has_flags)
-    /// - s_len (8 bytes)
-    /// - x_len (8 bytes)
-    /// - s_seq (encoded, rounded up to 8-byte words)
-    /// - s_qual (raw bytes, if has_qualities)
-    /// - s_header_len + s_header (8 + len bytes, if has_headers and s_header present)
-    /// - x_seq (encoded, rounded up to 8-byte words, if paired)
-    /// - x_qual (raw bytes, if has_qualities and paired)
-    /// - x_header_len + x_header (8 + len bytes, if has_headers and x_header present)
+    /// - Flag (8 bytes, if `has_flags`)
+    /// - `s_len` (8 bytes)
+    /// - `x_len` (8 bytes)
+    /// - `s_seq` (encoded, rounded up to 8-byte words)
+    /// - `s_qual` (raw bytes, if `has_qualities`)
+    /// - `s_header_len` + `s_header` (8 + len bytes, if `has_headers` and `s_header` present)
+    /// - `x_seq` (encoded, rounded up to 8-byte words, if paired)
+    /// - `x_qual` (raw bytes, if `has_qualities` and paired)
+    /// - `x_header_len` + `x_header` (8 + len bytes, if `has_headers` and `x_header` present)
     #[inline]
     #[must_use]
     pub fn configured_size_vbq(
@@ -222,10 +222,8 @@ impl<'a> SequencingRecord<'a> {
             if let Some(h) = self.s_header {
                 size += 8 + h.len(); // length prefix + header bytes
             }
-            if is_paired {
-                if let Some(h) = self.x_header {
-                    size += 8 + h.len(); // length prefix + header bytes
-                }
+            if is_paired && let Some(h) = self.x_header {
+                size += 8 + h.len(); // length prefix + header bytes
             }
         }
 

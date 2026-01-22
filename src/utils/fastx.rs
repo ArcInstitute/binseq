@@ -104,6 +104,7 @@ impl FastxEncoderBuilder {
     ///     .run()?;
     /// # Ok::<(), binseq::Error>(())
     /// ```
+    #[must_use]
     pub fn input_stdin(mut self) -> Self {
         self.input = Some(FastxInput::Stdin);
         self
@@ -150,6 +151,7 @@ impl FastxEncoderBuilder {
     ///     .run()?;
     /// # Ok::<(), binseq::Error>(())
     /// ```
+    #[must_use]
     pub fn threads(mut self, n: usize) -> Self {
         self.threads = n;
         self
