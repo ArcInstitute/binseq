@@ -1,6 +1,6 @@
 //! Unified writer interface for BINSEQ formats
 //!
-//! This module provides a unified [`BinseqWriter`] enum that abstracts over the three
+//! This module provides a unified `BinseqWriter` enum that abstracts over the three
 //! BINSEQ format writers (BQ, VBQ, CBQ), allowing format-agnostic writing of sequence data.
 //!
 //! # Example

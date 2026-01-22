@@ -14,6 +14,7 @@
 //! - Optional sequence headers/identifiers (VBQ format)
 //! - Abstract [`BinseqRecord`] trait for representing records from both `.bq` and `.vbq` files.
 //! - Abstract [`BinseqReader`] enum for processing records from both `.bq` and `.vbq` files.
+//! - Abstract [`BinseqWriter`] enum for writing records to both `.bq`, `.vbq`, and `.cbq` files.
 //!
 //! ## Recent VBQ Format Changes (v0.7.0+)
 //!
@@ -106,6 +107,7 @@ pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};
 pub use record::{BinseqRecord, SequencingRecord, SequencingRecordBuilder};
+pub use write::{BinseqWriter, BinseqWriterBuilder};
 
 /// Re-export `bitnuc::BitSize`
 pub use bitnuc::BitSize;
