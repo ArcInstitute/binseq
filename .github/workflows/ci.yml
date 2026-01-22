@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: run example ${{ matrix.ext }}
-        run: cargo run --release --example grep ./data/subset.${{ matrix.ext }}
+        run: cargo run --release --example grep -- ./data/subset.${{ matrix.ext }} "ACGTACGT"
 
   example_range:
     runs-on: ubuntu-latest
