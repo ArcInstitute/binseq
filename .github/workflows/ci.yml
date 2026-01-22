@@ -26,41 +26,44 @@ jobs:
       - name: Linting
         run: cargo clippy --verbose
 
-  example_read_write:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: run example
-        run: cargo run --release --example read_write
-
-  example_parallel:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: run example
-        run: cargo run --release --example parallel_processing
-
-  example_example:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: run example
-        run: cargo run --release --example example
-
   example_grep:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ext: [bq, vbq, cbq]
     steps:
       - uses: actions/checkout@v3
-      - name: run example bq
-        run: cargo run --release --example grep ./data/subset.bq
-      - name: run example vbq
-        run: cargo run --release --example grep ./data/subset.vbq
+      - name: run example ${matrix.ext}
+        run: cargo run --release --example grep ./data/subset.${matrix.ext}
 
   example_range:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ext: [bq, vbq, cbq]
     steps:
       - uses: actions/checkout@v3
-      - name: run example (bq)
-        run: cargo run --release --example parallel_range -- ./data/subset.bq 4 30 200
-      - name: run example (vbq)
-        run: cargo run --release --example parallel_range -- ./data/subset.vbq 4 30 200
+      - name: run example ${matrix.ext}
+        run: cargo run --release --example parallel_range -- ./data/subset.${matrix.ext} 4 30 200
+
+  example_write:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ext: [bq, vbq, cbq]
+    steps:
+      - uses: actions/checkout@v3
+      - name: run example (single) ${matrix.ext}
+        run: cargo run --release --example write -- ./data/subset_R1.fastq.gz -o ./output.${matrix.ext}
+      - name: run example (paired) ${matrix.ext}
+        run: cargo run --release --example write -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${matrix.ext}
+
+  example_read:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ext: [bq, vbq, cbq]
+    steps:
+      - uses: actions/checkout@v3
+      - name: run example ${matrix.ext}
+        run: cargo run --release --example read -- ./data/subset.${matrix.ext}
