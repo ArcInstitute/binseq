@@ -26,9 +26,6 @@ thiserror = "2.0.17"
 zstd = { version = "0.13.3", features = ["zstdmt"] }
 
 [dev-dependencies]
-nucgen = "0.2.0"
-niffler = "3.0.0"
-seq_io = "0.3.4"
 parking_lot = "0.12.5"
 anyhow = "1.0.100"
 clap = { version = "4.5.54", features = ["derive"] }
