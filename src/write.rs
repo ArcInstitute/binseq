@@ -81,7 +81,7 @@ impl FromStr for Format {
             "bq" | "BQ" | "b" => Ok(Self::Bq),
             "vbq" | "VBQ" | "v" => Ok(Self::Vbq),
             "cbq" | "CBQ" | "c" => Ok(Self::Cbq),
-            _ => Err(format!("Unknown format: {}", s)),
+            _ => Err(format!("Unknown format: {s}")),
         }
     }
 }
@@ -381,7 +381,7 @@ impl<W: Write> BinseqWriter<W> {
     /// Returns an error if there's an I/O error writing the final data.
     pub fn finish(&mut self) -> Result<()> {
         match self {
-            Self::Bq(w) => w.flush().map_err(Into::into),
+            Self::Bq(w) => w.flush(),
             Self::Vbq(w) => w.finish(),
             Self::Cbq(w) => w.finish(),
         }

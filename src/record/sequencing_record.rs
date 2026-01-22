@@ -265,7 +265,7 @@ impl<'a> SequencingRecordBuilder<'a> {
         self
     }
 
-    /// Builds the SequencingRecord
+    /// Builds the `SequencingRecord`
     ///
     /// # Errors
     ///

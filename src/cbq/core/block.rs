@@ -513,7 +513,7 @@ impl ColumnarBlock {
                 if *len as usize > self.qbuf.len() {
                     self.qbuf.resize(*len as usize, self.default_quality_score);
                 }
-            })
+            });
         }
 
         // decompress header lengths
@@ -721,7 +721,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
             let record = RefRecord {
                 block: self.block,
                 index: self.index,
-                qbuf: &self.qbuf,
+                qbuf: self.qbuf,
                 global_index,
                 sseq_span,
                 sheader_span,

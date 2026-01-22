@@ -133,6 +133,7 @@ impl Encoder {
     }
 
     /// Returns whether the header is paired-end.
+    #[must_use]
     pub fn is_paired(&self) -> bool {
         self.header.is_paired()
     }
@@ -494,13 +495,11 @@ impl<W: Write> BinseqWriter<W> {
             } else {
                 Ok(false)
             }
+        } else if let Some(buffer) = self.encoder.encode_single(record.s_seq)? {
+            write_buffer(&mut self.inner, buffer)?;
+            Ok(true)
         } else {
-            if let Some(buffer) = self.encoder.encode_single(record.s_seq)? {
-                write_buffer(&mut self.inner, buffer)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+            Ok(false)
         }
     }
 

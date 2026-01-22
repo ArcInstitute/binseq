@@ -508,6 +508,7 @@ impl MmapReader {
     }
 
     /// Creates a new quality score buffer
+    #[must_use]
     pub fn build_qbuf(&self) -> Vec<u8> {
         vec![self.default_quality_score; self.header.slen.max(self.header.xlen) as usize]
     }

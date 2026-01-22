@@ -917,7 +917,7 @@ impl BlockWriter {
 
         // Write the lengths
         self.write_length(record.s_seq.len() as u64)?;
-        self.write_length(record.x_seq.map_or(0, |x| x.len()) as u64)?;
+        self.write_length(record.x_seq.map_or(0, <[u8]>::len) as u64)?;
 
         // Write the primary sequence and optional quality
         self.write_buffer(sbuf)?;
