@@ -78,44 +78,6 @@ use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
 use crate::vbq::index::{INDEX_END_MAGIC, IndexHeader};
 use crate::vbq::{BlockIndex, BlockRange};
 
-/// Calculates the storage size in bytes required for a record without quality scores
-///
-/// This function calculates the total size needed to store a record in the VBINSEQ format,
-/// including the flag, sequence lengths, and the encoded sequence data. The formula
-/// used is: `S = w(Cs + Cx + 3)` where:
-///
-/// - `w`: Word size (8 bytes)
-/// - `Cs`: Chunk size of the primary sequence in 64-bit words
-/// - `Cx`: Chunk size of the extended sequence in 64-bit words (for paired-end reads)
-/// - `3`: Additional words for flag, primary length, and extended length
-///
-/// # Parameters
-///
-/// * `schunk` - Number of 64-bit words needed for the primary sequence
-/// * `xchunk` - Number of 64-bit words needed for the extended sequence (0 for single-end)
-///
-/// # Returns
-///
-/// The total size in bytes needed to store the record
-pub fn record_byte_size(schunk: usize, xchunk: usize, has_flags: bool) -> usize {
-    8 * (schunk + xchunk + if has_flags { 3 } else { 2 })
-}
-
-fn record_byte_size_quality_header(
-    schunk: usize,
-    xchunk: usize,
-    squal: usize,
-    xqual: usize,
-    sheader: usize,
-    xheader: usize,
-    has_flags: bool,
-) -> usize {
-    // counting the header length bytes (u64)
-    let bytes_sheader = if sheader > 0 { sheader + 8 } else { 0 };
-    let bytes_xheader = if xheader > 0 { xheader + 8 } else { 0 };
-    record_byte_size(schunk, xchunk, has_flags) + squal + xqual + bytes_sheader + bytes_xheader
-}
-
 /// A builder for creating configured `VBinseqWriter` instances
 ///
 /// This builder provides a fluent interface for configuring and creating a
@@ -359,7 +321,13 @@ impl<W: Write> VBinseqWriter<W> {
             inner,
             header,
             encoder: Encoder::with_policy(header.bits, policy),
-            cblock: BlockWriter::new(header.block as usize, header.compressed, header.flags),
+            cblock: BlockWriter::new(
+                header.block as usize,
+                header.compressed,
+                header.flags,
+                header.qual,
+                header.headers,
+            ),
             ranges: Vec::new(),
             bytes_written: 0,
             records_written: 0,
@@ -545,7 +513,7 @@ impl<W: Write> VBinseqWriter<W> {
     /// writer.finish().unwrap();
     /// ```
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
-        // Check configuration mismatches
+        // Check paired status - must match exactly since it affects record structure
         if record.is_paired() != self.header.paired {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
@@ -554,7 +522,10 @@ impl<W: Write> VBinseqWriter<W> {
             }
             .into());
         }
-        if record.has_qualities() != self.header.qual {
+
+        // For qualities and headers: the writer can require them (record must have them),
+        // but if the writer doesn't need them, we simply ignore any extra data in the record.
+        if self.header.qual && !record.has_qualities() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "qual",
                 expected: self.header.qual,
@@ -562,7 +533,7 @@ impl<W: Write> VBinseqWriter<W> {
             }
             .into());
         }
-        if record.has_headers() != self.header.headers {
+        if self.header.headers && !record.has_headers() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "headers",
                 expected: self.header.headers,
@@ -571,21 +542,20 @@ impl<W: Write> VBinseqWriter<W> {
             .into());
         }
 
+        let record_size = record.configured_size_vbq(
+            self.header.paired,
+            self.header.flags,
+            self.header.headers,
+            self.header.qual,
+            self.header.bits,
+        );
+
         if record.is_paired() {
             // encode the sequences
             if let Some((sbuffer, xbuffer)) = self
                 .encoder
                 .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
             {
-                let record_size = record_byte_size_quality_header(
-                    sbuffer.len(),
-                    xbuffer.len(),
-                    record.s_qual.map_or(0, <[u8]>::len),
-                    record.x_qual.map_or(0, <[u8]>::len),
-                    record.s_header.map_or(0, <[u8]>::len),
-                    record.x_header.map_or(0, <[u8]>::len),
-                    self.header.flags,
-                );
                 if self.cblock.exceeds_block_size(record_size)? {
                     impl_flush_block(
                         &mut self.inner,
@@ -604,15 +574,6 @@ impl<W: Write> VBinseqWriter<W> {
         } else {
             // encode the sequence
             if let Some(sbuffer) = self.encoder.encode_single(record.s_seq)? {
-                let record_size = record_byte_size_quality_header(
-                    sbuffer.len(),
-                    0,
-                    record.s_qual.map_or(0, <[u8]>::len),
-                    0,
-                    record.s_header.map_or(0, <[u8]>::len),
-                    0,
-                    self.header.flags,
-                );
                 if self.cblock.exceeds_block_size(record_size)? {
                     impl_flush_block(
                         &mut self.inner,
@@ -874,9 +835,19 @@ struct BlockWriter {
     compress: bool,
     /// Has flags
     has_flags: bool,
+    /// Has quality scores
+    has_qualities: bool,
+    /// Has headers
+    has_headers: bool,
 }
 impl BlockWriter {
-    fn new(block_size: usize, compress: bool, has_flags: bool) -> Self {
+    fn new(
+        block_size: usize,
+        compress: bool,
+        has_flags: bool,
+        has_qualities: bool,
+        has_headers: bool,
+    ) -> Self {
         Self {
             pos: 0,
             starts: Vec::default(),
@@ -887,6 +858,8 @@ impl BlockWriter {
             padding: vec![0; block_size],
             compress,
             has_flags,
+            has_qualities,
+            has_headers,
         }
     }
 
@@ -910,7 +883,7 @@ impl BlockWriter {
         // Tracks the record start position
         self.starts.push(self.pos);
 
-        // Write the flag
+        // Write the flag (only if configured)
         if self.has_flags {
             self.write_flag(record.flag.unwrap_or(0))?;
         }
@@ -919,26 +892,42 @@ impl BlockWriter {
         self.write_length(record.s_seq.len() as u64)?;
         self.write_length(record.x_seq.map_or(0, <[u8]>::len) as u64)?;
 
-        // Write the primary sequence and optional quality
+        // Write the primary sequence
         self.write_buffer(sbuf)?;
-        if let Some(qual) = record.s_qual {
-            self.write_u8buf(qual)?;
-        }
-        if let Some(sheader) = record.s_header {
-            self.write_length(sheader.len() as u64)?;
-            self.write_u8buf(sheader)?;
+
+        // Write primary quality (only if configured)
+        if self.has_qualities {
+            if let Some(qual) = record.s_qual {
+                self.write_u8buf(qual)?;
+            }
         }
 
-        // Write the optional extended sequence and optional quality
+        // Write primary header (only if configured)
+        if self.has_headers {
+            if let Some(sheader) = record.s_header {
+                self.write_length(sheader.len() as u64)?;
+                self.write_u8buf(sheader)?;
+            }
+        }
+
+        // Write the optional extended sequence
         if let Some(xbuf) = xbuf {
             self.write_buffer(xbuf)?;
         }
-        if let Some(qual) = record.x_qual {
-            self.write_u8buf(qual)?;
+
+        // Write extended quality (only if configured)
+        if self.has_qualities {
+            if let Some(qual) = record.x_qual {
+                self.write_u8buf(qual)?;
+            }
         }
-        if let Some(xheader) = record.x_header {
-            self.write_length(xheader.len() as u64)?;
-            self.write_u8buf(xheader)?;
+
+        // Write extended header (only if configured)
+        if self.has_headers {
+            if let Some(xheader) = record.x_header {
+                self.write_length(xheader.len() as u64)?;
+                self.write_u8buf(xheader)?;
+            }
         }
 
         Ok(())
@@ -1525,15 +1514,5 @@ mod tests {
         assert!(dest.ingest(&mut source).is_err());
 
         Ok(())
-    }
-
-    #[test]
-    #[allow(clippy::identity_op)]
-    fn test_record_byte_size() {
-        let size = record_byte_size(2, 0, true);
-        assert_eq!(size, 8 * (2 + 0 + 3)); // 40 bytes
-
-        let size = record_byte_size(4, 8, true);
-        assert_eq!(size, 8 * (4 + 8 + 3)); // 128 bytes
     }
 }

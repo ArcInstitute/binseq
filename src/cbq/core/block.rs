@@ -239,7 +239,13 @@ impl ColumnarBlock {
     }
 
     pub(crate) fn can_fit(&self, record: &SequencingRecord<'_>) -> bool {
-        self.current_size + record.size() <= self.header.block_size as usize
+        let configured_size = record.configured_size_cbq(
+            self.header.is_paired(),
+            self.header.has_flags(),
+            self.header.has_headers(),
+            self.header.has_qualities(),
+        );
+        self.current_size + configured_size <= self.header.block_size as usize
     }
 
     pub(crate) fn can_ingest(&self, other: &Self) -> bool {
@@ -248,23 +254,31 @@ impl ColumnarBlock {
 
     /// Ensure that the record can be pushed into the block
     fn validate_record(&self, record: &SequencingRecord) -> Result<()> {
+        let configured_size = record.configured_size_cbq(
+            self.header.is_paired(),
+            self.header.has_flags(),
+            self.header.has_headers(),
+            self.header.has_qualities(),
+        );
+
         if !self.can_fit(record) {
-            if record.size() > self.header.block_size as usize {
+            if configured_size > self.header.block_size as usize {
                 return Err(WriteError::RecordSizeExceedsMaximumBlockSize(
-                    record.size(),
+                    configured_size,
                     self.header.block_size as usize,
                 )
                 .into());
             }
             return Err(CbqError::BlockFull {
                 current_size: self.current_size,
-                record_size: record.size(),
+                record_size: configured_size,
                 block_size: self.header.block_size as usize,
             }
             .into());
         }
 
-        if self.header.is_paired() && !record.is_paired() {
+        // Check paired status - must match exactly since it affects record structure
+        if self.header.is_paired() != record.is_paired() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
                 expected: self.header.is_paired(),
@@ -273,6 +287,8 @@ impl ColumnarBlock {
             .into());
         }
 
+        // For flags, headers, and qualities: the writer can require them (record must have them),
+        // but if the writer doesn't need them, we simply ignore any extra data in the record.
         if self.header.has_flags() && !record.has_flags() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "flags",
@@ -305,11 +321,18 @@ impl ColumnarBlock {
     pub fn push(&mut self, record: SequencingRecord) -> Result<()> {
         self.validate_record(&record)?;
 
+        let configured_size = record.configured_size_cbq(
+            self.header.is_paired(),
+            self.header.has_flags(),
+            self.header.has_headers(),
+            self.header.has_qualities(),
+        );
+
         self.add_sequence(&record);
         self.add_flag(&record)?;
         self.add_headers(&record)?;
         self.add_quality(&record)?;
-        self.current_size += record.size();
+        self.current_size += configured_size;
         self.num_records += 1;
 
         Ok(())
