@@ -160,31 +160,76 @@ impl ColumnarBlock {
         self.nuclen = self.seq.len();
     }
 
-    fn add_flag(&mut self, record: &SequencingRecord) {
-        if let Some(flag) = record.flag {
+    fn add_flag(&mut self, record: &SequencingRecord) -> Result<()> {
+        if self.header.has_flags() {
+            let Some(flag) = record.flag else {
+                return Err(WriteError::ConfigurationMismatch {
+                    attribute: "flag",
+                    expected: true,
+                    actual: false,
+                }
+                .into());
+            };
             self.flags.push(flag);
         }
+        Ok(())
     }
 
-    fn add_headers(&mut self, record: &SequencingRecord) {
-        if let Some(header) = record.s_header {
-            self.l_headers.push(header.len() as u64);
-            self.headers.extend_from_slice(header);
+    fn add_headers(&mut self, record: &SequencingRecord) -> Result<()> {
+        if self.header.has_headers() {
+            let Some(sheader) = record.s_header else {
+                return Err(WriteError::ConfigurationMismatch {
+                    attribute: "s_header",
+                    expected: true,
+                    actual: false,
+                }
+                .into());
+            };
+            self.l_headers.push(sheader.len() as u64);
+            self.headers.extend_from_slice(sheader);
+
+            if self.header.is_paired() {
+                let Some(xheader) = record.x_header else {
+                    return Err(WriteError::ConfigurationMismatch {
+                        attribute: "x_header",
+                        expected: true,
+                        actual: false,
+                    }
+                    .into());
+                };
+                self.l_headers.push(xheader.len() as u64);
+                self.headers.extend_from_slice(xheader);
+            }
         }
-        if let Some(header) = record.x_header {
-            self.l_headers.push(header.len() as u64);
-            self.headers.extend_from_slice(header);
-        }
+        Ok(())
     }
 
     /// Note: this does not check if quality scores are different lengths from sequence
-    fn add_quality(&mut self, record: &SequencingRecord) {
-        if let Some(qual) = record.s_qual {
-            self.qual.extend_from_slice(qual);
+    fn add_quality(&mut self, record: &SequencingRecord) -> Result<()> {
+        if self.header.has_qualities() {
+            let Some(squal) = record.s_qual() else {
+                return Err(WriteError::ConfigurationMismatch {
+                    attribute: "s_qual",
+                    expected: true,
+                    actual: false,
+                }
+                .into());
+            };
+            self.qual.extend_from_slice(squal);
+
+            if self.header.is_paired() {
+                let Some(xqual) = record.x_qual() else {
+                    return Err(WriteError::ConfigurationMismatch {
+                        attribute: "x_qual",
+                        expected: true,
+                        actual: false,
+                    }
+                    .into());
+                };
+                self.qual.extend_from_slice(xqual);
+            }
         }
-        if let Some(qual) = record.x_qual {
-            self.qual.extend_from_slice(qual);
-        }
+        Ok(())
     }
 
     /// Calculate the usage of the block as a percentage
@@ -219,7 +264,7 @@ impl ColumnarBlock {
             .into());
         }
 
-        if record.is_paired() != self.header.is_paired() {
+        if self.header.is_paired() && !record.is_paired() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
                 expected: self.header.is_paired(),
@@ -228,7 +273,7 @@ impl ColumnarBlock {
             .into());
         }
 
-        if record.has_flags() != self.header.has_flags() {
+        if self.header.has_flags() && !record.has_flags() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "flags",
                 expected: self.header.has_flags(),
@@ -237,7 +282,7 @@ impl ColumnarBlock {
             .into());
         }
 
-        if record.has_headers() != self.header.has_headers() {
+        if self.header.has_headers() && !record.has_headers() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "headers",
                 expected: self.header.has_headers(),
@@ -246,7 +291,7 @@ impl ColumnarBlock {
             .into());
         }
 
-        if record.has_qualities() != self.header.has_qualities() {
+        if self.header.has_qualities() && !record.has_qualities() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "qualities",
                 expected: self.header.has_qualities(),
@@ -261,9 +306,9 @@ impl ColumnarBlock {
         self.validate_record(&record)?;
 
         self.add_sequence(&record);
-        self.add_flag(&record);
-        self.add_headers(&record);
-        self.add_quality(&record);
+        self.add_flag(&record)?;
+        self.add_headers(&record)?;
+        self.add_quality(&record)?;
         self.current_size += record.size();
         self.num_records += 1;
 
