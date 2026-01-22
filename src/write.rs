@@ -120,8 +120,8 @@ impl Format {
 /// | `headless(true)` | applied | applied | applied |
 #[derive(Debug, Clone)]
 pub struct BinseqWriterBuilder {
-    format: Format,
-    paired: bool,
+    pub(crate) format: Format,
+    pub(crate) paired: bool,
     quality: bool,
     headers: bool,
     flags: bool,
@@ -131,8 +131,8 @@ pub struct BinseqWriterBuilder {
     policy: Option<Policy>,
     headless: bool,
     bitsize: Option<BitSize>,
-    slen: Option<u32>,
-    xlen: Option<u32>,
+    pub(crate) slen: Option<u32>,
+    pub(crate) xlen: Option<u32>,
 }
 
 impl BinseqWriterBuilder {
@@ -238,6 +238,50 @@ impl BinseqWriterBuilder {
     pub fn xlen(mut self, len: u32) -> Self {
         self.xlen = Some(len);
         self
+    }
+
+    /// Encode FASTX file(s) to BINSEQ format
+    ///
+    /// This method returns a [`FastxEncoderBuilder`] that allows you to configure
+    /// the input source and threading options before executing the encoding.
+    ///
+    /// This is an alternative to [`build`](Self::build) that directly processes
+    /// FASTX files using parallel processing.
+    ///
+    /// # Availability
+    ///
+    /// This method is only available when the `paraseq` feature is enabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use binseq::write::{BinseqWriterBuilder, Format};
+    /// use std::fs::File;
+    ///
+    /// // Encode from stdin to VBQ
+    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
+    ///     .quality(true)
+    ///     .headers(true)
+    ///     .encode_fastx(File::create("output.vbq")?)
+    ///     .input_stdin()
+    ///     .threads(8)
+    ///     .run()?;
+    ///
+    /// // Encode paired-end reads
+    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
+    ///     .quality(true)
+    ///     .encode_fastx(File::create("output.vbq")?)
+    ///     .input_paired("R1.fastq", "R2.fastq")
+    ///     .run()?;
+    /// # Ok::<(), binseq::Error>(())
+    /// ```
+    #[cfg(feature = "paraseq")]
+    #[must_use]
+    pub fn encode_fastx<W: Write + Send + 'static>(
+        self,
+        output: W,
+    ) -> crate::utils::FastxEncoderBuilder {
+        crate::utils::FastxEncoderBuilder::new(self, Box::new(output))
     }
 
     /// Build the writer
