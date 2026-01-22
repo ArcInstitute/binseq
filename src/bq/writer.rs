@@ -475,7 +475,9 @@ impl<W: Write> BinseqWriter<W> {
             write_flag(&mut self.inner, record.flag().unwrap_or(0))?;
         }
 
-        if record.is_paired() != self.encoder.header.is_paired() {
+        // Check paired status - writer can require paired (record must have R2),
+        // but if writer is single-end, we simply ignore any R2 data in the record.
+        if self.encoder.header.is_paired() && !record.is_paired() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
                 expected: self.encoder.header.is_paired(),
@@ -484,7 +486,7 @@ impl<W: Write> BinseqWriter<W> {
             .into());
         }
 
-        if record.is_paired() {
+        if self.encoder.header.is_paired() {
             if let Some((sbuffer, xbuffer)) = self
                 .encoder
                 .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?

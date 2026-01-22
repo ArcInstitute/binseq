@@ -513,8 +513,9 @@ impl<W: Write> VBinseqWriter<W> {
     /// writer.finish().unwrap();
     /// ```
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
-        // Check paired status - must match exactly since it affects record structure
-        if record.is_paired() != self.header.paired {
+        // Check paired status - writer can require paired (record must have R2),
+        // but if writer is single-end, we simply ignore any R2 data in the record.
+        if self.header.paired && !record.is_paired() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
                 expected: self.header.paired,

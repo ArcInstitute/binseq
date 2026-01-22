@@ -820,4 +820,691 @@ mod tests {
 
         Ok(())
     }
+
+    // ==================== Record Specification Tests ====================
+    //
+    // These tests verify that writers correctly handle records with different
+    // levels of specification relative to the writer's configuration:
+    // - Under-specified: record is missing data the writer needs (should error)
+    // - Over-specified: record has extra data the writer ignores (should succeed)
+    // - Correctly-specified: record matches writer config exactly (should succeed)
+
+    /// Helper to create a minimal single-end record (sequence only)
+    fn minimal_single_record() -> SequencingRecord<'static> {
+        SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGTACGTACGTACGTACGTACGTACGT")
+            .build()
+            .unwrap()
+    }
+
+    /// Helper to create a minimal paired record (sequences only)
+    fn minimal_paired_record() -> SequencingRecord<'static> {
+        SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGTACGTACGTACGTACGTACGTACGT")
+            .x_seq(b"TGCATGCATGCATGCATGCATGCATGCATGCA")
+            .build()
+            .unwrap()
+    }
+
+    /// Helper to create a fully-specified single-end record
+    fn full_single_record() -> SequencingRecord<'static> {
+        SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGTACGTACGTACGTACGTACGTACGT")
+            .s_qual(b"IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII")
+            .s_header(b"read1")
+            .flag(42u64)
+            .build()
+            .unwrap()
+    }
+
+    /// Helper to create a fully-specified paired record
+    fn full_paired_record() -> SequencingRecord<'static> {
+        SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGTACGTACGTACGTACGTACGTACGT")
+            .s_qual(b"IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII")
+            .s_header(b"read1")
+            .x_seq(b"TGCATGCATGCATGCATGCATGCATGCATGCA")
+            .x_qual(b"JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ")
+            .x_header(b"read2")
+            .flag(42u64)
+            .build()
+            .unwrap()
+    }
+
+    // ==================== VBQ Tests ====================
+
+    #[test]
+    fn test_vbq_single_minimal_writer_minimal_record() -> Result<()> {
+        // Writer: single-end, no quality, no headers, no flags
+        // Record: single-end, no quality, no headers, no flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_single_minimal_writer_full_record() -> Result<()> {
+        // Writer: single-end, no quality, no headers, no flags
+        // Record: single-end, with quality, headers, flags
+        // Expected: success (over-specified - extra data ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_single_full_writer_minimal_record() -> Result<()> {
+        // Writer: single-end, with quality, headers, flags
+        // Record: single-end, no quality, no headers, no flags
+        // Expected: error (under-specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(false)
+            .quality(true)
+            .headers(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        let result = writer.push(record);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_single_full_writer_full_record() -> Result<()> {
+        // Writer: single-end, with quality, headers, flags
+        // Record: single-end, with quality, headers, flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(false)
+            .quality(true)
+            .headers(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_paired_writer_single_record() -> Result<()> {
+        // Writer: paired
+        // Record: single-end
+        // Expected: error (under-specified - missing R2)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(true)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        let result = writer.push(record);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_single_writer_paired_record() -> Result<()> {
+        // Writer: single-end
+        // Record: paired
+        // Expected: success (over-specified - R2 ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_paired_minimal_writer_paired_full_record() -> Result<()> {
+        // Writer: paired, no quality, no headers, no flags
+        // Record: paired, with quality, headers, flags
+        // Expected: success (over-specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(true)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_vbq_paired_full_writer_paired_full_record() -> Result<()> {
+        // Writer: paired, with quality, headers, flags
+        // Record: paired, with quality, headers, flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(true)
+            .quality(true)
+            .headers(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    // ==================== CBQ Tests ====================
+
+    #[test]
+    fn test_cbq_single_minimal_writer_minimal_record() -> Result<()> {
+        // Writer: single-end, no quality, no headers, no flags
+        // Record: single-end, no quality, no headers, no flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_single_minimal_writer_full_record() -> Result<()> {
+        // Writer: single-end, no quality, no headers, no flags
+        // Record: single-end, with quality, headers, flags
+        // Expected: success (over-specified - extra data ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_single_full_writer_minimal_record() -> Result<()> {
+        // Writer: single-end, with quality, headers, flags
+        // Record: single-end, no quality, no headers, no flags
+        // Expected: error (under-specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(false)
+            .quality(true)
+            .headers(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        let result = writer.push(record);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_single_full_writer_full_record() -> Result<()> {
+        // Writer: single-end, with quality, headers, flags
+        // Record: single-end, with quality, headers, flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(false)
+            .quality(true)
+            .headers(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_paired_writer_single_record() -> Result<()> {
+        // Writer: paired
+        // Record: single-end
+        // Expected: error (under-specified - missing R2)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(true)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        let result = writer.push(record);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_single_writer_paired_record() -> Result<()> {
+        // Writer: single-end
+        // Record: paired
+        // Expected: success (over-specified - R2 ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_paired_minimal_writer_paired_full_record() -> Result<()> {
+        // Writer: paired, no quality, no headers, no flags
+        // Record: paired, with quality, headers, flags
+        // Expected: success (over-specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(true)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_paired_full_writer_paired_full_record() -> Result<()> {
+        // Writer: paired, with quality, headers, flags
+        // Record: paired, with quality, headers, flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(true)
+            .quality(true)
+            .headers(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    // ==================== BQ Tests ====================
+    // Note: BQ format has fixed-length sequences and doesn't support headers
+
+    #[test]
+    fn test_bq_single_minimal_writer_minimal_record() -> Result<()> {
+        // Writer: single-end, no quality, no flags
+        // Record: single-end, no quality, no flags
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .paired(false)
+            .quality(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_single_minimal_writer_full_record() -> Result<()> {
+        // Writer: single-end, no quality, no flags
+        // Record: single-end, with quality, headers, flags
+        // Expected: success (over-specified - extra data ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .paired(false)
+            .quality(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_single_with_quality_writer_minimal_record() -> Result<()> {
+        // Writer: single-end, with quality (note: BQ ignores quality setting)
+        // Record: single-end, no quality
+        // Expected: success (BQ format doesn't support quality scores, setting is ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .paired(false)
+            .quality(true) // This is ignored for BQ format
+            .build(Cursor::new(Vec::new()))?;
+
+        // BQ always reports has_quality as false
+        assert!(!writer.has_quality());
+
+        let record = minimal_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_single_with_quality_writer_full_record() -> Result<()> {
+        // Writer: single-end, with quality
+        // Record: single-end, with quality
+        // Expected: success (correctly specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .paired(false)
+            .quality(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_single_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_paired_writer_single_record() -> Result<()> {
+        // Writer: paired
+        // Record: single-end
+        // Expected: error (under-specified - missing R2)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .xlen(32)
+            .paired(true)
+            .quality(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_single_record();
+        let result = writer.push(record);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_single_writer_paired_record() -> Result<()> {
+        // Writer: single-end
+        // Record: paired
+        // Expected: success (over-specified - R2 ignored)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .paired(false)
+            .quality(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = minimal_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_paired_minimal_writer_paired_full_record() -> Result<()> {
+        // Writer: paired, no quality, no flags
+        // Record: paired, with quality, headers, flags
+        // Expected: success (over-specified)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .xlen(32)
+            .paired(true)
+            .quality(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_paired_full_writer_paired_full_record() -> Result<()> {
+        // Writer: paired, with quality, flags
+        // Record: paired, with quality, headers, flags
+        // Expected: success (correctly specified, headers ignored for BQ)
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .xlen(32)
+            .paired(true)
+            .quality(true)
+            .flags(true)
+            .build(Cursor::new(Vec::new()))?;
+
+        let record = full_paired_record();
+        assert!(writer.push(record)?);
+        writer.finish()?;
+        Ok(())
+    }
+
+    // ==================== Configured Size Calculation Tests ====================
+
+    #[test]
+    fn test_configured_size_cbq_single_minimal() {
+        let record = minimal_single_record();
+        // 32 nucleotides = 1 u64 word = 8 bytes
+        let size = record.configured_size_cbq(false, false, false, false);
+        assert_eq!(size, 8);
+    }
+
+    #[test]
+    fn test_configured_size_cbq_single_with_flags() {
+        let record = full_single_record();
+        // 32 nucleotides = 8 bytes + 8 bytes flag
+        let size = record.configured_size_cbq(false, true, false, false);
+        assert_eq!(size, 16);
+    }
+
+    #[test]
+    fn test_configured_size_cbq_single_with_all() {
+        let record = full_single_record();
+        // 32 nucleotides = 8 bytes
+        // + 8 bytes flag
+        // + 5 bytes header ("read1")
+        // + 32 bytes quality
+        let size = record.configured_size_cbq(false, true, true, true);
+        assert_eq!(size, 8 + 8 + 5 + 32);
+    }
+
+    #[test]
+    fn test_configured_size_cbq_paired_minimal() {
+        let record = full_paired_record();
+        // s_seq: 32 nucleotides = 8 bytes
+        // x_seq: 32 nucleotides = 8 bytes
+        let size = record.configured_size_cbq(true, false, false, false);
+        assert_eq!(size, 16);
+    }
+
+    #[test]
+    fn test_configured_size_cbq_paired_with_all() {
+        let record = full_paired_record();
+        // s_seq: 32 nucleotides = 8 bytes
+        // x_seq: 32 nucleotides = 8 bytes
+        // flag: 8 bytes
+        // s_header: 5 bytes ("read1")
+        // x_header: 5 bytes ("read2")
+        // s_qual: 32 bytes
+        // x_qual: 32 bytes
+        let size = record.configured_size_cbq(true, true, true, true);
+        assert_eq!(size, 8 + 8 + 8 + 5 + 5 + 32 + 32);
+    }
+
+    #[test]
+    fn test_configured_size_cbq_paired_record_single_writer() {
+        // A paired record being written to a single-end writer
+        // should only count R1 data
+        let record = full_paired_record();
+        let size = record.configured_size_cbq(false, true, true, true);
+        // Only s_seq (8) + flag (8) + s_header (5) + s_qual (32)
+        assert_eq!(size, 8 + 8 + 5 + 32);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_single_minimal() {
+        use bitnuc::BitSize;
+        let record = minimal_single_record();
+        // s_len (8) + x_len (8) + s_seq (32 nucs = 1 word = 8 bytes)
+        let size = record.configured_size_vbq(false, false, false, false, BitSize::Two);
+        assert_eq!(size, 16 + 8);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_single_with_flags() {
+        use bitnuc::BitSize;
+        let record = full_single_record();
+        // s_len (8) + x_len (8) + flag (8) + s_seq (8)
+        let size = record.configured_size_vbq(false, true, false, false, BitSize::Two);
+        assert_eq!(size, 16 + 8 + 8);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_single_with_all() {
+        use bitnuc::BitSize;
+        let record = full_single_record();
+        // s_len (8) + x_len (8) + flag (8) + s_seq (8) + s_qual (32) + s_header_len (8) + s_header (5)
+        let size = record.configured_size_vbq(false, true, true, true, BitSize::Two);
+        assert_eq!(size, 16 + 8 + 8 + 32 + 8 + 5);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_paired_minimal() {
+        use bitnuc::BitSize;
+        let record = full_paired_record();
+        // s_len (8) + x_len (8) + s_seq (8) + x_seq (8)
+        let size = record.configured_size_vbq(true, false, false, false, BitSize::Two);
+        assert_eq!(size, 16 + 8 + 8);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_paired_with_all() {
+        use bitnuc::BitSize;
+        let record = full_paired_record();
+        // s_len (8) + x_len (8) + flag (8) + s_seq (8) + x_seq (8)
+        // + s_qual (32) + x_qual (32)
+        // + s_header_len (8) + s_header (5) + x_header_len (8) + x_header (5)
+        let size = record.configured_size_vbq(true, true, true, true, BitSize::Two);
+        assert_eq!(size, 16 + 8 + 8 + 8 + 32 + 32 + 8 + 5 + 8 + 5);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_paired_record_single_writer() {
+        use bitnuc::BitSize;
+        // A paired record being written to a single-end writer
+        // should only count R1 data
+        let record = full_paired_record();
+        let size = record.configured_size_vbq(false, true, true, true, BitSize::Two);
+        // s_len (8) + x_len (8) + flag (8) + s_seq (8) + s_qual (32) + s_header_len (8) + s_header (5)
+        assert_eq!(size, 16 + 8 + 8 + 32 + 8 + 5);
+    }
+
+    #[test]
+    fn test_configured_size_vbq_four_bit_encoding() {
+        use bitnuc::BitSize;
+        let record = minimal_single_record();
+        // With 4-bit encoding: 2 nucleotides per byte, 16 per word
+        // 32 nucleotides = 2 words = 16 bytes
+        // s_len (8) + x_len (8) + s_seq (16)
+        let size = record.configured_size_vbq(false, false, false, false, BitSize::Four);
+        assert_eq!(size, 16 + 16);
+    }
+
+    // ==================== Multiple Records Tests ====================
+
+    #[test]
+    fn test_vbq_multiple_records_mixed_specification() -> Result<()> {
+        // Writer configured minimally, records over-specified
+        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        // Push minimal record
+        assert!(writer.push(minimal_single_record())?);
+        // Push full record (over-specified, should work)
+        assert!(writer.push(full_single_record())?);
+        // Push paired record (over-specified, R2 ignored)
+        assert!(writer.push(full_paired_record())?);
+
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_cbq_multiple_records_mixed_specification() -> Result<()> {
+        // Writer configured minimally, records over-specified
+        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+            .paired(false)
+            .quality(false)
+            .headers(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        // Push minimal record
+        assert!(writer.push(minimal_single_record())?);
+        // Push full record (over-specified, should work)
+        assert!(writer.push(full_single_record())?);
+        // Push paired record (over-specified, R2 ignored)
+        assert!(writer.push(full_paired_record())?);
+
+        writer.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_multiple_records_mixed_specification() -> Result<()> {
+        // Writer configured minimally, records over-specified
+        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+            .slen(32)
+            .paired(false)
+            .quality(false)
+            .flags(false)
+            .build(Cursor::new(Vec::new()))?;
+
+        // Push minimal record
+        assert!(writer.push(minimal_single_record())?);
+        // Push full record (over-specified, should work)
+        assert!(writer.push(full_single_record())?);
+        // Push paired record (over-specified, R2 ignored)
+        assert!(writer.push(full_paired_record())?);
+
+        writer.finish()?;
+        Ok(())
+    }
 }
