@@ -50,7 +50,7 @@
 //! let header = bq::FileHeaderBuilder::new().slen(64).build().unwrap();
 //!
 //! // Initialize our BINSEQ writer
-//! let mut writer = bq::BinseqWriterBuilder::default()
+//! let mut writer = bq::WriterBuilder::default()
 //!     .header(header)
 //!     .build(output_handle)
 //!     .unwrap();
@@ -83,7 +83,7 @@
 //! let header = bq::FileHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
 //!
 //! // Initialize our BINSEQ writer
-//! let mut writer = bq::BinseqWriterBuilder::default()
+//! let mut writer = bq::WriterBuilder::default()
 //!     .header(header)
 //!     .build(output_handle)
 //!     .unwrap();
@@ -243,4 +243,4 @@ mod writer;
 
 pub use header::{FileHeader, FileHeaderBuilder, SIZE_HEADER};
 pub use reader::{MmapReader, RefRecord, StreamReader};
-pub use writer::{BinseqWriter, BinseqWriterBuilder, Encoder, StreamWriter, StreamWriterBuilder};
+pub use writer::{Encoder, StreamWriter, StreamWriterBuilder, Writer, WriterBuilder};

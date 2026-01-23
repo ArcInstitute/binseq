@@ -387,7 +387,7 @@ impl BinseqWriterBuilder {
 
         let header = header_builder.build()?;
 
-        let inner = bq::BinseqWriterBuilder::default()
+        let inner = bq::WriterBuilder::default()
             .header(header)
             .policy(self.policy.unwrap_or_default())
             .headless(self.headless)
@@ -449,7 +449,7 @@ impl BinseqWriterBuilder {
 /// a unified interface for writing sequence data.
 pub enum BinseqWriter<W: Write> {
     /// BQ format writer
-    Bq(bq::BinseqWriter<W>),
+    Bq(bq::Writer<W>),
     /// VBQ format writer
     Vbq(vbq::VBinseqWriter<W>),
     /// CBQ format writer
@@ -580,7 +580,7 @@ impl<W: Write> BinseqWriter<W> {
     pub fn new_headless_buffer(&self) -> Result<BinseqWriter<Vec<u8>>> {
         match self {
             Self::Bq(w) => {
-                let inner = bq::BinseqWriterBuilder::default()
+                let inner = bq::WriterBuilder::default()
                     .header(w.header())
                     .policy(w.policy())
                     .headless(true)
