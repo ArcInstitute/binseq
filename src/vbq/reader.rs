@@ -1663,15 +1663,14 @@ mod tests {
 
     // ==================== Parallel Processing Tests ====================
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     struct VbqCountingProcessor {
         count: Arc<std::sync::Mutex<usize>>,
     }
 
     impl ParallelProcessor for VbqCountingProcessor {
         fn process_record<R: BinseqRecord>(&mut self, _record: R) -> Result<()> {
-            let mut count = self.count.lock().unwrap();
-            *count += 1;
+            *self.count.lock().unwrap() += 1;
             Ok(())
         }
     }
@@ -1688,21 +1687,14 @@ mod tests {
 
         let num_records = num_records_result.unwrap();
 
-        let count = Arc::new(std::sync::Mutex::new(0));
-        let processor = VbqCountingProcessor {
-            count: count.clone(),
-        };
+        let processor = VbqCountingProcessor::default();
 
-        let result = reader.process_parallel(processor, 2);
+        let result = reader.process_parallel(processor.clone(), 2);
 
         // Parallel processing might not be supported for all VBQ files
         if result.is_ok() {
-            let final_count = *count.lock().unwrap();
-            // The count should be reasonable (not overflow)
-            assert!(
-                final_count <= num_records * 2,
-                "Processed count should not exceed records significantly"
-            );
+            let final_count = *processor.count.lock().unwrap();
+            assert_eq!(final_count, num_records,);
         }
     }
 
@@ -1723,20 +1715,17 @@ mod tests {
             let end = 50;
             let expected_count = end - start;
 
-            let count = Arc::new(std::sync::Mutex::new(0));
-            let processor = VbqCountingProcessor {
-                count: count.clone(),
-            };
+            let processor = VbqCountingProcessor::default();
 
-            let result = reader.process_parallel_range(processor, 2, start..end);
+            let result = reader.process_parallel_range(processor.clone(), 2, start..end);
 
             // Parallel processing might not be supported for all VBQ files
             if result.is_ok() {
-                let final_count = *count.lock().unwrap();
+                let final_count = *processor.count.lock().unwrap();
                 // The count should be reasonable
-                assert!(
-                    final_count <= expected_count * 2,
-                    "Processed count should not exceed expected range significantly"
+                assert_eq!(
+                    final_count, expected_count,
+                    "Processed count should match expected range"
                 );
             }
         }
