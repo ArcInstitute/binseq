@@ -2,19 +2,28 @@
 //!
 //! # BINSEQ
 //!
-//! The `binseq` library provides efficient APIs for working with the [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1) file format family.
+//! The `binseq` library provides efficient APIs for working with the [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) file format family.
 //!
 //! It offers methods to read and write BINSEQ files, providing:
 //!
 //! - Compact multi-bit encoding and decoding of nucleotide sequences through [`bitnuc`](https://docs.rs/bitnuc/latest/bitnuc/)
-//! - Memory-mapped file access for efficient reading ([`bq::MmapReader`] and [`vbq::MmapReader`])
-//! - Parallel processing capabilities for arbitrary tasks through the [`ParallelProcessor`] trait.
-//! - Configurable [`Policy`] for handling invalid nucleotides
 //! - Support for both single and paired-end sequences
-//! - Optional sequence headers/identifiers (VBQ format)
-//! - Abstract [`BinseqRecord`] trait for representing records from both `.bq` and `.vbq` files.
-//! - Abstract [`BinseqReader`] enum for processing records from both `.bq` and `.vbq` files.
-//! - Abstract [`BinseqWriter`] enum for writing records to both `.bq`, `.vbq`, and `.cbq` files.
+//! - Abstract [`BinseqRecord`] trait for representing records from all variants
+//! - Abstract [`BinseqReader`] enum for processing records from all variants
+//! - Abstract [`BinseqWriter`] enum for writing records to all variants
+//! - Parallel processing capabilities for arbitrary tasks through the [`ParallelProcessor`] trait.
+//! - Configurable [`Policy`] for handling invalid nucleotides (BQ/VBQ, CBQ natively supports `N` nucleotides)
+//!
+//! ## Recent additions (v0.9.0):
+//!
+//! ### New variant: CBQ
+//! **[`cbq`]** is a new variant of BINSEQ that solves many of the pain points around VBQ.
+//! The CBQ format is a columnar-block-based format that offers improved compression and faster processing speeds compared to VBQ.
+//! It natively supports `N` nucleotides and avoids the need for additional 4-bit encoding.
+//!
+//! ### Improved interface for writing records
+//! **[`BinseqWriter`]** provides a unified interface for writing records generically to BINSEQ files.
+//! This makes use of the new [`SequencingRecord`] which provides a cleaner builder API for writing records to BINSEQ files.
 //!
 //! ## Recent VBQ Format Changes (v0.7.0+)
 //!
@@ -27,13 +36,6 @@
 //! - **Multi-bit Encoding**: Support for both 2-bit and 4-bit nucleotide encodings.
 //!
 //! Legacy VBQ files are automatically migrated to the new format when accessed.
-//!
-//! ## Crate Organization
-//!
-//! This library is split into 3 major parts.
-//!
-//! There are the [`bq`] and [`vbq`] modules, which provide tools for reading and writing `BQ` and `VBQ` files respectively.
-//! Then there are traits and utilities that are ubiquitous across the library which are available at the top-level of the crate.
 //!
 //! # Example: Memory-mapped Access
 //!
