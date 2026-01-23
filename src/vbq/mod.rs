@@ -71,7 +71,7 @@
 //! ## Recent Format Changes (v0.7.0+)
 //!
 //! * **Embedded Index**: Index data is now stored within the VBQ file itself, eliminating
-//!   separate `.vqi` files and improving portability.
+//!   improving portability.
 //! * **Headers Support**: Optional sequence identifiers can be stored with each record.
 //! * **Extended Capacity**: u64 indexing supports files with more than 4 billion records.
 //! * **Multi-bit Encoding**: Support for both 2-bit and 4-bit nucleotide encodings.

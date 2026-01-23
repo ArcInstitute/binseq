@@ -60,24 +60,6 @@ pub enum Error {
     #[error("Fastx encoding error: {0}")]
     FastxEncodingError(#[from] FastxEncodingError),
 }
-impl Error {
-    /// Checks if the error is an index mismatch error
-    ///
-    /// This is useful for determining if a file's index is out of sync with its content,
-    /// which might require rebuilding the index.
-    ///
-    /// # Returns
-    ///
-    /// * `true` if the error is an `IndexError::ByteSizeMismatch`
-    /// * `false` for all other error types
-    #[must_use]
-    pub fn is_index_mismatch(&self) -> bool {
-        match self {
-            Self::IndexError(err) => err.is_mismatch(),
-            _ => false,
-        }
-    }
-}
 
 /// Errors specific to processing and validating binary sequence headers
 #[derive(thiserror::Error, Debug)]
@@ -284,35 +266,9 @@ pub enum IndexError {
     #[error("Invalid magic number: {0}")]
     InvalidMagicNumber(u64),
 
-    /// When the index references a file that doesn't exist
-    ///
-    /// The parameter is the missing file path
-    #[error("Index missing upstream file path: {0}")]
-    MissingUpstreamFile(String),
-
-    /// When the size of the file doesn't match what the index expects
-    ///
-    /// The first parameter is the actual file size, the second is the expected size
-    #[error("Mismatch in size between upstream size: {0} and expected index size {1}")]
-    ByteSizeMismatch(u64, u64),
-
     /// Invalid reserved bytes in the index header
     #[error("Invalid reserved bytes in index header")]
     InvalidReservedBytes,
-}
-impl IndexError {
-    /// Checks if this error indicates a mismatch between the index and file
-    ///
-    /// This is useful to determine if the index needs to be rebuilt.
-    ///
-    /// # Returns
-    ///
-    /// * `true` for `ByteSizeMismatch` errors
-    /// * `true` for any other error type (this behavior is likely a bug and should be fixed)
-    #[must_use]
-    pub fn is_mismatch(&self) -> bool {
-        matches!(self, Self::ByteSizeMismatch(_, _) | _) // Note: this appears to always return true regardless of error type
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -409,55 +365,6 @@ mod testing {
         let my_error = MyError::CustomError(String::from("some error"));
         let binseq_error = my_error.into_binseq_error();
         assert!(matches!(binseq_error, Error::GenericError(_)));
-    }
-
-    // ==================== Error::is_index_mismatch Tests ====================
-
-    #[test]
-    fn test_is_index_mismatch_with_byte_size_mismatch() {
-        let error = Error::IndexError(IndexError::ByteSizeMismatch(100, 200));
-        assert!(error.is_index_mismatch());
-    }
-
-    #[test]
-    fn test_is_index_mismatch_with_invalid_magic() {
-        let error = Error::IndexError(IndexError::InvalidMagicNumber(0x1234));
-        // Note: The current implementation has a bug - it always returns true
-        assert!(error.is_index_mismatch());
-    }
-
-    #[test]
-    fn test_is_index_mismatch_with_non_index_error() {
-        let error = Error::WriteError(WriteError::MissingHeader);
-        assert!(!error.is_index_mismatch());
-    }
-
-    // ==================== IndexError Tests ====================
-
-    #[test]
-    fn test_index_error_is_mismatch() {
-        let error = IndexError::ByteSizeMismatch(100, 200);
-        assert!(error.is_mismatch());
-    }
-
-    #[test]
-    fn test_index_error_invalid_magic() {
-        let error = IndexError::InvalidMagicNumber(0x1234);
-        // Note: Current implementation bug - always returns true
-        assert!(error.is_mismatch());
-    }
-
-    #[test]
-    fn test_index_error_missing_upstream_file() {
-        let error = IndexError::MissingUpstreamFile("test.vbq".to_string());
-        assert!(error.is_mismatch());
-        assert!(format!("{}", error).contains("test.vbq"));
-    }
-
-    #[test]
-    fn test_index_error_invalid_reserved_bytes() {
-        let error = IndexError::InvalidReservedBytes;
-        assert!(error.is_mismatch());
     }
 
     // ==================== HeaderError Tests ====================

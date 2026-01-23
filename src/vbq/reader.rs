@@ -5,7 +5,7 @@
 //!
 //! ## Format Changes (v0.7.0+)
 //!
-//! - **Embedded Index**: Readers now load the index from within VBQ files instead of separate `.vqi` files
+//! - **Embedded Index**: Readers now load the index from within VBQ files
 //! - **Headers Support**: Optional sequence headers/identifiers can be read from each record
 //! - **Multi-bit Encoding**: Support for reading 2-bit and 4-bit nucleotide encodings
 //! - **Extended Capacity**: u64 indexing supports files with more than 4 billion records
@@ -51,7 +51,7 @@
 
 use std::fs::File;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use bitnuc::BitSize;
@@ -792,9 +792,6 @@ impl BinseqRecord for RefRecord<'_> {
 /// }
 /// ```
 pub struct MmapReader {
-    /// Path to the VBQ file
-    path: PathBuf,
-
     /// Memory-mapped file contents for efficient access
     mmap: Arc<Mmap>,
 
@@ -822,9 +819,7 @@ impl MmapReader {
     ///
     /// ## Index Loading (v0.7.0+)
     ///
-    /// The embedded index is automatically loaded from the end of the file. For legacy
-    /// files with separate `.vqi` index files, the index is automatically migrated to
-    /// the embedded format.
+    /// The embedded index is automatically loaded from the end of the file.
     ///
     /// # Parameters
     ///
@@ -865,7 +860,6 @@ impl MmapReader {
         };
 
         Ok(Self {
-            path: PathBuf::from(path.as_ref()),
             mmap: Arc::new(mmap),
             header,
             pos: SIZE_HEADER,
@@ -919,36 +913,6 @@ impl MmapReader {
     /// ```
     pub fn set_decode_block(&mut self, decode_block: bool) {
         self.decode_block = decode_block;
-    }
-
-    /// Returns the path where the index file would be located
-    ///
-    /// The index file is used for random access to blocks and has the same path as
-    /// the VBQ file with the ".vqi" extension appended.
-    ///
-    /// # Returns
-    ///
-    /// The path where the index file would be located
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use binseq::vbq::MmapReader;
-    /// use binseq::Result;
-    ///
-    /// fn main() -> Result<()> {
-    ///     let path = "./data/subset.vbq";
-    ///     let reader = MmapReader::new(path)?;
-    ///     let index_path = reader.index_path();
-    ///     assert_eq!(index_path.to_str(), Some("./data/subset.vbq.vqi"));
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub fn index_path(&self) -> PathBuf {
-        let mut p = self.path.as_os_str().to_owned();
-        p.push(".vqi");
-        p.into()
     }
 
     /// Returns a copy of the file's header information
@@ -1080,23 +1044,20 @@ impl MmapReader {
         Ok(true)
     }
 
-    /// Loads or creates the block index for this VBQ file
+    /// Loads the embedded block index from this VBQ file
     ///
     /// The block index provides metadata about each block in the file, enabling
-    /// random access to blocks and parallel processing. This method first attempts to
-    /// load an existing index file. If the index doesn't exist or doesn't match the
-    /// current file, it automatically generates a new index from the VBQ file
-    /// and saves it for future use.
+    /// random access to blocks and parallel processing. This method reads the
+    /// embedded index from the end of the VBQ file.
     ///
     /// # Returns
     ///
-    /// The loaded or newly created `BlockIndex` if successful
+    /// The loaded `BlockIndex` if successful
     ///
     /// # Errors
     ///
-    /// * File I/O errors when reading or creating the index
-    /// * Parsing errors if the VBQ file has invalid format
-    /// * Other index-related errors that cannot be resolved by creating a new index
+    /// * File I/O errors when reading the index
+    /// * Parsing errors if the VBQ file has invalid format or missing index
     ///
     /// # Examples
     ///
@@ -1105,18 +1066,12 @@ impl MmapReader {
     ///
     /// let reader = MmapReader::new("example.vbq").unwrap();
     ///
-    /// // Load the index file (or create if it doesn't exist)
+    /// // Load the embedded index
     /// let index = reader.load_index().unwrap();
     ///
     /// // Use the index to get information about the file
     /// println!("Number of blocks: {}", index.n_blocks());
     /// ```
-    ///
-    /// # Notes
-    ///
-    /// The index file is stored with the same path as the VBQ file but with a ".vqi"
-    /// extension appended. This allows for reusing the index across multiple runs,
-    /// which can significantly improve startup performance for large files.
     pub fn load_index(&self) -> Result<BlockIndex> {
         let start_pos_magic = self.mmap.len() - 8;
         let start_pos_index_size = start_pos_magic - 8;
@@ -1442,15 +1397,6 @@ mod tests {
         let header = &reader.header;
         assert!(header.block > 0, "Expected non-zero block size");
         assert_eq!(header.magic, 0x51455356, "Expected VSEQ magic number");
-    }
-
-    #[test]
-    fn test_mmap_reader_index_path() {
-        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
-        let index_path = reader.index_path();
-
-        let expected_path = format!("{}.vqi", TEST_VBQ_FILE);
-        assert_eq!(index_path.to_str(), Some(expected_path.as_str()));
     }
 
     // ==================== RecordBlock Tests ====================

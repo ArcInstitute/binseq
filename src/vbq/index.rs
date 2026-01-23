@@ -4,9 +4,8 @@
 //!
 //! ## Format Changes (v0.7.0+)
 //!
-//! **BREAKING CHANGE**: The VBQ index is now embedded at the end of VBQ files instead of
-//! being stored in separate `.vqi` files. This improves portability and eliminates the
-//! need to manage auxiliary files.
+//! **BREAKING CHANGE**: The VBQ index is now embedded at the end of VBQ files,
+//! improving portability and eliminating the need to manage auxiliary files.
 //!
 //! ## Embedded Index Structure
 //!
@@ -29,13 +28,13 @@
 //!
 //! ## Key Changes from v0.6.x
 //!
-//! - Index moved from separate `.vqi` files into VBQ files
+//! - Index is now embedded in VBQ files
 //! - Cumulative record counts changed from `u32` to `u64`
 //! - Support for files with more than 4 billion records
 
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Cursor, Read, Write},
+    io::{Cursor, Read, Write},
     path::Path,
 };
 
@@ -374,9 +373,10 @@ impl IndexHeader {
 /// `IndexHeader` and a collection of `BlockRange` entries, one for each block in
 /// the file.
 ///
-/// The index can be created by scanning a VBQ file or loaded from a previously
-/// created index file. Once loaded, it provides information about block locations,
-/// sizes, and record counts.
+/// The index is embedded at the end of VBQ files and can be loaded using
+/// `MmapReader::load_index()` or created by scanning a VBQ file using
+/// `BlockIndex::from_vbq()`. Once loaded, it provides information about block
+/// locations, sizes, and record counts.
 ///
 /// # Examples
 ///
@@ -387,10 +387,6 @@ impl IndexHeader {
 /// // Create an index from a VBQ file
 /// let vbq_path = Path::new("example.vbq");
 /// let index = BlockIndex::from_vbq(vbq_path).unwrap();
-///
-/// // Save the index for future use
-/// let index_path = Path::new("example.vbq.vqi");
-/// index.save_to_path(index_path).unwrap();
 ///
 /// // Use the index with a reader for parallel processing
 /// let reader = MmapReader::new(vbq_path).unwrap();
@@ -430,52 +426,16 @@ impl BlockIndex {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::BlockIndex;
+    /// use binseq::vbq::{BlockIndex, MmapReader};
     /// use std::path::Path;
     ///
-    /// let index = BlockIndex::from_path(Path::new("example.vbq.vqi")).unwrap();
+    /// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
+    /// let index = reader.load_index().unwrap();
     /// println!("The file contains {} blocks", index.n_blocks());
     /// ```
     #[must_use]
     pub fn n_blocks(&self) -> usize {
         self.ranges.len()
-    }
-
-    /// Writes the collection of `BlockRange` to a file
-    /// Saves the index to a file
-    ///
-    /// This writes the index header and all block ranges to a file, which can be loaded
-    /// later to avoid rescanning the VBQ file. The index is compressed to reduce
-    /// storage space.
-    ///
-    /// # Parameters
-    ///
-    /// * `path` - The path where the index file should be saved
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the index was successfully saved
-    /// * `Err(_)` - If an error occurred during saving
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::BlockIndex;
-    /// use std::path::Path;
-    ///
-    /// // Create an index from a VBQ file
-    /// let index = BlockIndex::from_vbq(Path::new("example.vbq")).unwrap();
-    ///
-    /// // Save it for future use
-    /// index.save_to_path(Path::new("example.vbq.vqi")).unwrap();
-    /// ```
-    pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let mut writer = File::create(path).map(BufWriter::new)?;
-        self.header.write_bytes(&mut writer)?;
-        let mut writer = Encoder::new(writer, 3)?.auto_finish();
-        self.write_range(&mut writer)?;
-        writer.flush()?;
-        Ok(())
     }
 
     /// Write the index to an output buffer
@@ -490,9 +450,8 @@ impl BlockIndex {
     /// Write the collection of `BlockRange` to an output handle
     /// Writes all block ranges to the provided writer
     ///
-    /// This method is used internally by `save_to_path` to write the block ranges
-    /// to an index file. It can also be used to serialize an index to any destination
-    /// that implements `Write`.
+    /// This method is used internally to write the block ranges to the embedded index.
+    /// It can also be used to serialize an index to any destination that implements `Write`.
     ///
     /// # Parameters
     ///
@@ -524,8 +483,8 @@ impl BlockIndex {
     /// Creates a new index by scanning a VBQ file
     ///
     /// This method memory-maps the specified VBQ file and scans it block by block
-    /// to create an index. The index can then be saved to a file for future use, enabling
-    /// efficient random access without rescanning the file.
+    /// to create an index. This is primarily used internally when embedding the index
+    /// into VBQ files during the write process.
     ///
     /// # Parameters
     ///
@@ -544,9 +503,6 @@ impl BlockIndex {
     ///
     /// // Create an index from a VBQ file
     /// let index = BlockIndex::from_vbq(Path::new("example.vbq")).unwrap();
-    ///
-    /// // Save the index for future use
-    /// index.save_to_path(Path::new("example.vbq.vqi")).unwrap();
     ///
     /// // Get statistics about the file
     /// println!("File contains {} blocks", index.n_blocks());
@@ -603,45 +559,6 @@ impl BlockIndex {
         Ok(index)
     }
 
-    /// Reads an index from a path
-    ///
-    /// # Panics
-    /// Panics if the path is not a valid UTF-8 string.
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let Some(upstream_file) = path.as_ref().to_str().unwrap().strip_suffix(".vqi") else {
-            return Err(IndexError::MissingUpstreamFile(
-                path.as_ref().to_string_lossy().to_string(),
-            )
-            .into());
-        };
-        let upstream_handle = File::open(upstream_file)?;
-        let mmap = unsafe { memmap2::Mmap::map(&upstream_handle)? };
-        let file_size = mmap.len() as u64;
-
-        let mut file_handle = File::open(path).map(BufReader::new)?;
-        let index_header = IndexHeader::from_reader(&mut file_handle)?;
-        if index_header.bytes != file_size {
-            return Err(IndexError::ByteSizeMismatch(file_size, index_header.bytes).into());
-        }
-        let buffer = {
-            let mut buffer = Vec::new();
-            let mut decoder = Decoder::new(file_handle)?;
-            decoder.read_to_end(&mut buffer)?;
-            buffer
-        };
-
-        let mut ranges = Self::new(index_header);
-        let mut pos = 0;
-        while pos < buffer.len() {
-            let bound = pos + SIZE_BLOCK_RANGE;
-            let range = BlockRange::from_bytes(&buffer[pos..bound]);
-            ranges.add_range(range);
-            pos += SIZE_BLOCK_RANGE;
-        }
-
-        Ok(ranges)
-    }
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let index_header = IndexHeader::from_bytes(bytes)?;
         let buffer = {
@@ -676,10 +593,11 @@ impl BlockIndex {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::BlockIndex;
+    /// use binseq::vbq::MmapReader;
     /// use std::path::Path;
     ///
-    /// let index = BlockIndex::from_path(Path::new("example.vbq.vqi")).unwrap();
+    /// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
+    /// let index = reader.load_index().unwrap();
     ///
     /// // Examine the ranges to determine which blocks to process
     /// for (i, range) in index.ranges().iter().enumerate() {
