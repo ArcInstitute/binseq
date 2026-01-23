@@ -273,7 +273,21 @@ mod testing {
     }
 
     #[test]
-    fn test_parallel_processor_out_of_range() {
+    fn test_parallel_processor_out_of_range_start() {
+        for ext in ["bq", "vbq", "cbq"] {
+            eprintln!("Testing {}", ext);
+            let reader = BinseqReader::new(&format!("./data/subset.{}", ext)).unwrap();
+            let processor = TestProcessor::default();
+            assert!(
+                reader
+                    .process_parallel_range(processor, 0, 1_000_000..1_000_001)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_processor_out_of_range_end() {
         for ext in ["bq", "vbq", "cbq"] {
             eprintln!("Testing {}", ext);
             let reader = BinseqReader::new(&format!("./data/subset.{}", ext)).unwrap();
@@ -283,6 +297,45 @@ mod testing {
                     .process_parallel_range(processor, 0, 0..1_000_000)
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn test_parallel_processor_backwards_range() {
+        for ext in ["bq", "vbq", "cbq"] {
+            eprintln!("Testing {}", ext);
+            let reader = BinseqReader::new(&format!("./data/subset.{}", ext)).unwrap();
+            let processor = TestProcessor::default();
+            assert!(reader.process_parallel_range(processor, 0, 100..0).is_err());
+        }
+    }
+
+    #[test]
+    fn test_set_decode_block() {
+        for ext in ["bq", "vbq", "cbq"] {
+            for opt in [true, false] {
+                eprintln!("Testing {} - decode {}", ext, opt);
+                let mut reader = BinseqReader::new(&format!("./data/subset.{}", ext)).unwrap();
+                reader.set_decode_block(opt);
+                let num_records = reader.num_records().unwrap();
+                let processor = TestProcessor::default();
+                assert!(reader.process_parallel(processor.clone(), 0).is_ok());
+                assert_eq!(*processor.n_records.lock(), num_records);
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_default_quality_score() {
+        for ext in ["bq", "vbq", "cbq"] {
+            let default_score = b'#';
+            eprintln!("Testing {} - default score: {}", ext, default_score);
+            let mut reader = BinseqReader::new(&format!("./data/subset.{}", ext)).unwrap();
+            reader.set_default_quality_score(default_score);
+            let num_records = reader.num_records().unwrap();
+            let processor = TestProcessor::default();
+            assert!(reader.process_parallel(processor.clone(), 0).is_ok());
+            assert_eq!(*processor.n_records.lock(), num_records);
         }
     }
 }
