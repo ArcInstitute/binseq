@@ -630,6 +630,7 @@ impl<W: Write> Writer<W> {
     /// }
     /// ```
     pub fn finish(&mut self) -> Result<()> {
+        // Flush any remaining data in the current block
         impl_flush_block(
             &mut self.inner,
             &mut self.cblock,
@@ -639,6 +640,8 @@ impl<W: Write> Writer<W> {
         )?;
         self.inner.flush()?;
 
+        // Always write the index - this is critical for VBQ file validity
+        // The index_written flag prevents double-writing on subsequent finish() calls
         if !self.index_written {
             self.write_index()?;
             self.index_written = true;
@@ -1508,6 +1511,95 @@ mod tests {
 
         // Ingest from source to dest (will error)
         assert!(dest.ingest(&mut source).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_index_always_written_on_finish() -> super::Result<()> {
+        use crate::vbq::index::INDEX_END_MAGIC;
+        use byteorder::{ByteOrder, LittleEndian};
+
+        // Create a writer with some records
+        let header = FileHeaderBuilder::new().build();
+        let mut writer = WriterBuilder::default().header(header).build(Vec::new())?;
+
+        // Write some records
+        for i in 0..10 {
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(i)
+                .build()?;
+            writer.push(record)?;
+        }
+
+        // Finish the writer
+        writer.finish()?;
+
+        // Get the written bytes
+        let bytes = &writer.inner;
+
+        // Verify the file ends with the index magic number
+        assert!(bytes.len() >= 8, "File is too short to contain index");
+        let magic_offset = bytes.len() - 8;
+        let magic = LittleEndian::read_u64(&bytes[magic_offset..]);
+        assert_eq!(
+            magic, INDEX_END_MAGIC,
+            "Index magic number not found at end of file"
+        );
+
+        // Verify we can read the index size
+        assert!(bytes.len() >= 16, "File is too short to contain index size");
+        let size_offset = bytes.len() - 16;
+        let index_size = LittleEndian::read_u64(&bytes[size_offset..size_offset + 8]);
+        assert!(index_size > 0, "Index size should be greater than 0");
+
+        // Verify the index size makes sense (should be less than total file size)
+        assert!(
+            index_size < bytes.len() as u64,
+            "Index size is larger than file"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_finish_idempotent() -> super::Result<()> {
+        use crate::vbq::index::INDEX_END_MAGIC;
+        use byteorder::{ByteOrder, LittleEndian};
+
+        // Create a writer
+        let header = FileHeaderBuilder::new().build();
+        let mut writer = WriterBuilder::default().header(header).build(Vec::new())?;
+
+        // Write some records
+        for i in 0..10 {
+            let record = SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGT")
+                .flag(i)
+                .build()?;
+            writer.push(record)?;
+        }
+
+        // Call finish() multiple times
+        writer.finish()?;
+        let size_after_first_finish = writer.inner.len();
+
+        writer.finish()?;
+        let size_after_second_finish = writer.inner.len();
+
+        writer.finish()?;
+        let size_after_third_finish = writer.inner.len();
+
+        // All sizes should be the same - index should only be written once
+        assert_eq!(size_after_first_finish, size_after_second_finish);
+        assert_eq!(size_after_second_finish, size_after_third_finish);
+
+        // Verify only one index magic number at the end
+        let bytes = &writer.inner;
+        let magic_offset = bytes.len() - 8;
+        let magic = LittleEndian::read_u64(&bytes[magic_offset..]);
+        assert_eq!(magic, INDEX_END_MAGIC);
 
         Ok(())
     }
