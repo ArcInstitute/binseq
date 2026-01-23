@@ -551,7 +551,7 @@ impl<W: Write> VBinseqWriter<W> {
             self.header.bits,
         );
 
-        if record.is_paired() {
+        if self.header.is_paired() {
             // encode the sequences
             if let Some((sbuffer, xbuffer)) = self
                 .encoder

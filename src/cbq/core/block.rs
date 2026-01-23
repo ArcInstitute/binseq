@@ -146,11 +146,20 @@ impl ColumnarBlock {
         }
     }
 
-    fn add_sequence(&mut self, record: &SequencingRecord) {
+    fn add_sequence(&mut self, record: &SequencingRecord) -> Result<()> {
         self.l_seq.push(record.s_seq.len() as u64);
         self.seq.extend_from_slice(record.s_seq);
         self.num_sequences += 1;
-        if let Some(x_seq) = record.x_seq {
+
+        if self.header.is_paired() {
+            let Some(x_seq) = record.x_seq else {
+                return Err(WriteError::ConfigurationMismatch {
+                    attribute: "x_seq",
+                    expected: true,
+                    actual: false,
+                }
+                .into());
+            };
             self.l_seq.push(x_seq.len() as u64);
             self.seq.extend_from_slice(x_seq);
             self.num_sequences += 1;
@@ -158,6 +167,7 @@ impl ColumnarBlock {
 
         // keep the sequence size up to date
         self.nuclen = self.seq.len();
+        Ok(())
     }
 
     fn add_flag(&mut self, record: &SequencingRecord) -> Result<()> {
@@ -329,7 +339,7 @@ impl ColumnarBlock {
             self.header.has_qualities(),
         );
 
-        self.add_sequence(&record);
+        self.add_sequence(&record)?;
         self.add_flag(&record)?;
         self.add_headers(&record)?;
         self.add_quality(&record)?;
