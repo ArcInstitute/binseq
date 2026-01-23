@@ -30,4 +30,4 @@ This is a **library** for reading and writing BINSEQ files, for a **command-line
 To get started please refer to our [documentation](https://docs.rs/binseq/latest/binseq/).
 For example programs which make use of the library check out our [examples directory](https://github.com/arcinstitute/binseq/tree/main/examples).
 
-For more information about the BINSEQ file family, please refer to our [preprint](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1).
+For more information about the BINSEQ file family, please refer to our [preprint](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2).
