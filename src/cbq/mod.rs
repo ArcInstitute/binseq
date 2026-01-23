@@ -80,8 +80,6 @@ pub use core::{
     BlockHeader, BlockRange, ColumnarBlock, FileHeader, FileHeaderBuilder, Index, IndexFooter,
     IndexHeader, RefRecord, RefRecordIter,
 };
-// Re-export from crate root for backwards compatibility
-pub use crate::{SequencingRecord, SequencingRecordBuilder};
 pub use read::{MmapReader, Reader};
 pub use write::ColumnarBlockWriter;
 
