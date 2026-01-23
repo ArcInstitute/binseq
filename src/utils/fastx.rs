@@ -396,6 +396,9 @@ mod tests {
     use crate::write::Format;
     use std::io::Cursor;
 
+    const FASTQ_R1_PATH: &str = "./data/subset_R1.fastq.gz";
+    const FASTQ_R2_PATH: &str = "./data/subset_R2.fastq.gz";
+
     #[test]
     fn test_encoder_builder_construction() {
         let builder = BinseqWriterBuilder::new(Format::Vbq);
@@ -428,11 +431,23 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_builder_single() {
+        let builder = BinseqWriterBuilder::new(Format::Vbq);
+        let handle = Box::new(Cursor::new(Vec::new()));
+        let encoder_builder = FastxEncoderBuilder::new(builder, handle).input(FASTQ_R1_PATH);
+
+        assert!(matches!(encoder_builder.input, Some(FastxInput::Single(_))));
+
+        // Run the encoder builder and assert that it is successful
+        assert!(encoder_builder.run().is_ok());
+    }
+
+    #[test]
     fn test_encoder_builder_paired() {
         let builder = BinseqWriterBuilder::new(Format::Vbq);
         let handle = Box::new(Cursor::new(Vec::new()));
         let encoder_builder =
-            FastxEncoderBuilder::new(builder, handle).input_paired("r1.fastq", "r2.fastq");
+            FastxEncoderBuilder::new(builder, handle).input_paired(FASTQ_R1_PATH, FASTQ_R2_PATH);
 
         assert!(matches!(
             encoder_builder.input,
@@ -440,5 +455,8 @@ mod tests {
         ));
         // Should automatically set paired mode
         assert!(encoder_builder.builder.paired);
+
+        // Run the encoder builder and assert that it is successful
+        assert!(encoder_builder.run().is_ok());
     }
 }

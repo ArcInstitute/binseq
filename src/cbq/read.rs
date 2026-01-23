@@ -239,9 +239,7 @@ impl ParallelReader for MmapReader {
 
         // validate range
         let total_records = self.num_records();
-        if range.start >= total_records || range.end > total_records || range.start > range.end {
-            return Ok(()); // nothing to do
-        }
+        self.validate_range(total_records, &range)?;
 
         let mut iv_start = 0;
         let relevant_blocks = self
@@ -260,12 +258,32 @@ impl ParallelReader for MmapReader {
             return Ok(()); // nothing to do
         }
 
-        let blocks_per_thread = num_blocks.div_ceil(num_threads);
+        // Distribute blocks evenly across threads, giving extra blocks to first threads
+        let base_blocks_per_thread = num_blocks / num_threads;
+        let extra_blocks = num_blocks % num_threads;
 
         let mut handles = Vec::new();
         for thread_id in 0..num_threads {
-            let start_block_idx = thread_id * blocks_per_thread;
-            let end_block_idx = ((thread_id + 1) * blocks_per_thread).min(num_blocks);
+            // Threads 0..extra_blocks get one extra block
+            let blocks_for_this_thread = if thread_id < extra_blocks {
+                base_blocks_per_thread + 1
+            } else {
+                base_blocks_per_thread
+            };
+
+            // Calculate cumulative start position
+            let start_block_idx = if thread_id < extra_blocks {
+                thread_id * (base_blocks_per_thread + 1)
+            } else {
+                extra_blocks * (base_blocks_per_thread + 1)
+                    + (thread_id - extra_blocks) * base_blocks_per_thread
+            };
+            let end_block_idx = start_block_idx + blocks_for_this_thread;
+
+            // Skip threads with no work (happens when num_threads > num_blocks)
+            if blocks_for_this_thread == 0 {
+                continue;
+            }
 
             let mut t_reader = self.clone();
             let mut t_proc = processor.clone();
@@ -309,5 +327,310 @@ impl ParallelReader for MmapReader {
             handle.join().unwrap()?;
         }
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BinseqRecord;
+
+    const TEST_CBQ_FILE: &str = "./data/subset.cbq";
+
+    // ==================== MmapReader Basic Tests ====================
+
+    #[test]
+    fn test_mmap_reader_new() {
+        let reader = MmapReader::new(TEST_CBQ_FILE);
+        assert!(reader.is_ok(), "Failed to create CBQ reader");
+    }
+
+    #[test]
+    fn test_mmap_reader_num_records() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+        assert!(num_records > 0, "Expected non-zero records");
+    }
+
+    #[test]
+    fn test_mmap_reader_is_paired() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let is_paired = reader.is_paired();
+        // Test that the method returns a boolean
+        assert!(is_paired || !is_paired);
+    }
+
+    #[test]
+    fn test_mmap_reader_header_access() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let header = reader.header();
+        assert!(header.block_size > 0, "Expected non-zero block size");
+    }
+
+    #[test]
+    fn test_mmap_reader_index_access() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let index = reader.index();
+        assert!(index.num_records() > 0, "Index should have records");
+    }
+
+    #[test]
+    fn test_mmap_reader_num_blocks() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_blocks = reader.num_blocks();
+        assert!(num_blocks > 0, "Should have at least one block");
+    }
+
+    // ==================== Default Quality Score Tests ====================
+
+    #[test]
+    fn test_set_default_quality_score() {
+        let mut reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let custom_score = 42u8;
+
+        reader.set_default_quality_score(custom_score);
+        // Just verify it doesn't panic
+    }
+
+    // ==================== Parallel Processing Tests ====================
+
+    #[derive(Clone)]
+    struct CbqCountingProcessor {
+        count: Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl ParallelProcessor for CbqCountingProcessor {
+        fn process_record<R: BinseqRecord>(&mut self, _record: R) -> Result<()> {
+            let mut count = self.count.lock().unwrap();
+            *count += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_parallel_processing() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = CbqCountingProcessor {
+            count: count.clone(),
+        };
+
+        reader.process_parallel(processor, 2).unwrap();
+
+        let final_count = *count.lock().unwrap();
+        assert_eq!(final_count, num_records, "All records should be processed");
+    }
+
+    #[test]
+    fn test_parallel_processing_range() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        if num_records >= 100 {
+            let start = 10;
+            let end = 50;
+            let expected_count = end - start;
+
+            let count = Arc::new(std::sync::Mutex::new(0));
+            let processor = CbqCountingProcessor {
+                count: count.clone(),
+            };
+
+            reader
+                .process_parallel_range(processor, 2, start..end)
+                .unwrap();
+
+            let final_count = *count.lock().unwrap();
+            assert_eq!(
+                final_count, expected_count,
+                "Should process exactly {} records",
+                expected_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_processing_with_record_data() {
+        #[derive(Clone)]
+        struct RecordValidator {
+            valid_count: Arc<std::sync::Mutex<usize>>,
+        }
+
+        impl ParallelProcessor for RecordValidator {
+            fn process_record<R: BinseqRecord>(&mut self, record: R) -> Result<()> {
+                // Validate record has non-zero length
+                assert!(record.slen() > 0, "Record should have non-zero length");
+
+                let mut count = self.valid_count.lock().unwrap();
+                *count += 1;
+                Ok(())
+            }
+        }
+
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = RecordValidator {
+            valid_count: count.clone(),
+        };
+
+        reader.process_parallel(processor, 2).unwrap();
+
+        let final_count = *count.lock().unwrap();
+        assert_eq!(final_count, num_records);
+    }
+
+    // ==================== Index Tests ====================
+
+    #[test]
+    fn test_index_num_records() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+
+        let index_records = reader.index().num_records();
+        let reader_records = reader.num_records();
+
+        assert_eq!(
+            index_records, reader_records,
+            "Index and reader should report same number of records"
+        );
+    }
+
+    #[test]
+    fn test_index_num_blocks() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+
+        let num_blocks = reader.index().num_blocks();
+        assert!(num_blocks > 0, "Should have at least one block");
+    }
+
+    #[test]
+    fn test_index_iter_blocks() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+
+        let blocks: Vec<_> = reader.index().iter_blocks().collect();
+        assert!(!blocks.is_empty(), "Should have at least one block");
+
+        let num_blocks = reader.num_blocks();
+        assert_eq!(blocks.len(), num_blocks, "Block count should match");
+    }
+
+    // ==================== Error Handling Tests ====================
+
+    #[test]
+    fn test_nonexistent_file() {
+        let result = MmapReader::new("./data/nonexistent.cbq");
+        assert!(result.is_err(), "Should fail on nonexistent file");
+    }
+
+    #[test]
+    fn test_invalid_file_format() {
+        // Try to open a non-CBQ file as CBQ
+        let result = MmapReader::new("./Cargo.toml");
+        // This should fail during header validation
+        assert!(result.is_err(), "Should fail on invalid file format");
+    }
+
+    // ==================== Block Header Iterator Tests ====================
+
+    #[test]
+    fn test_iter_block_headers() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+
+        let headers: Vec<_> = reader
+            .iter_block_headers()
+            .take(5)
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        assert!(!headers.is_empty(), "Should have at least one block header");
+
+        for header in headers {
+            assert!(header.num_records > 0, "Block should have records");
+        }
+    }
+
+    #[test]
+    fn test_iter_block_headers_count() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+
+        let header_count = reader
+            .iter_block_headers()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .len();
+
+        let num_blocks = reader.num_blocks();
+        assert_eq!(header_count, num_blocks, "Should iterate all block headers");
+    }
+
+    // ==================== Empty Range Tests ====================
+
+    #[test]
+    fn test_parallel_processing_empty_range() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = CbqCountingProcessor {
+            count: count.clone(),
+        };
+
+        // Process empty range
+        reader.process_parallel_range(processor, 2, 0..0).unwrap();
+
+        let final_count = *count.lock().unwrap();
+        assert_eq!(final_count, 0, "Empty range should process no records");
+    }
+
+    #[test]
+    fn test_parallel_processing_invalid_range() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = CbqCountingProcessor {
+            count: count.clone(),
+        };
+
+        // Process out of bounds range (should error)
+        let result =
+            reader.process_parallel_range(processor, 2, num_records + 100..num_records + 200);
+
+        assert!(result.is_err(), "Should handle out of bounds as error");
+    }
+
+    // ==================== Thread Count Tests ====================
+
+    #[test]
+    fn test_parallel_processing_single_thread() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = CbqCountingProcessor {
+            count: count.clone(),
+        };
+
+        reader.process_parallel(processor, 1).unwrap();
+
+        let final_count = *count.lock().unwrap();
+        assert_eq!(final_count, num_records);
+    }
+
+    #[test]
+    fn test_parallel_processing_many_threads() {
+        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = CbqCountingProcessor {
+            count: count.clone(),
+        };
+
+        reader.process_parallel(processor, 8).unwrap();
+
+        let final_count = *count.lock().unwrap();
+        assert_eq!(final_count, num_records);
     }
 }

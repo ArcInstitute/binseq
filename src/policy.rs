@@ -169,3 +169,282 @@ impl Policy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    // ==================== Basic Policy Tests ====================
+
+    #[test]
+    fn test_default_policy() {
+        let policy = Policy::default();
+        assert!(matches!(policy, Policy::IgnoreSequence));
+    }
+
+    #[test]
+    fn test_ignore_sequence_policy() {
+        let policy = Policy::IgnoreSequence;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(!should_process); // Should return false to skip this sequence
+        assert!(output.is_empty()); // Output buffer should be empty
+    }
+
+    #[test]
+    fn test_break_on_invalid_policy() {
+        let policy = Policy::BreakOnInvalid;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let result = policy.handle(sequence, &mut output, &mut rng);
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::error::Error::WriteError(WriteError::InvalidNucleotideSequence(_))
+        ));
+    }
+
+    #[test]
+    fn test_break_on_invalid_with_valid_sequence() {
+        let policy = Policy::BreakOnInvalid;
+        let sequence = b"ACGT";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let result = policy.handle(sequence, &mut output, &mut rng);
+
+        // Valid sequences should error because handle() doesn't validate for BreakOnInvalid
+        // It only returns an error immediately
+        assert!(result.is_err());
+    }
+
+    // ==================== Set-to-Specific-Nucleotide Tests ====================
+
+    #[test]
+    fn test_set_to_a_policy() {
+        let policy = Policy::SetToA;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process); // Should return true to process this sequence
+        assert_eq!(output, b"ACGTAA"); // N and X should be replaced with A
+    }
+
+    #[test]
+    fn test_set_to_c_policy() {
+        let policy = Policy::SetToC;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert_eq!(output, b"ACGTCC"); // N and X should be replaced with C
+    }
+
+    #[test]
+    fn test_set_to_g_policy() {
+        let policy = Policy::SetToG;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert_eq!(output, b"ACGTGG"); // N and X should be replaced with G
+    }
+
+    #[test]
+    fn test_set_to_t_policy() {
+        let policy = Policy::SetToT;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert_eq!(output, b"ACGTTT"); // N and X should be replaced with T
+    }
+
+    #[test]
+    fn test_all_valid_nucleotides_unchanged() {
+        let policy = Policy::SetToA;
+        let sequence = b"ACGTACGT";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert_eq!(output, b"ACGTACGT"); // All valid, should remain unchanged
+    }
+
+    // ==================== Random Draw Tests ====================
+
+    #[test]
+    fn test_random_draw_policy() {
+        let policy = Policy::RandomDraw;
+        let sequence = b"ACGTNX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert_eq!(output.len(), 6); // Same length as input
+        // First 4 nucleotides should be unchanged
+        assert_eq!(&output[0..4], b"ACGT");
+        // Last 2 should be valid nucleotides (A, C, G, or T)
+        assert!(matches!(output[4], b'A' | b'C' | b'G' | b'T'));
+        assert!(matches!(output[5], b'A' | b'C' | b'G' | b'T'));
+    }
+
+    #[test]
+    fn test_random_draw_deterministic_with_seed() {
+        let policy = Policy::RandomDraw;
+        let sequence = b"NNNN";
+        let mut output1 = Vec::new();
+        let mut output2 = Vec::new();
+        let mut rng1 = StdRng::seed_from_u64(RNG_SEED);
+        let mut rng2 = StdRng::seed_from_u64(RNG_SEED);
+
+        policy.handle(sequence, &mut output1, &mut rng1).unwrap();
+        policy.handle(sequence, &mut output2, &mut rng2).unwrap();
+
+        // Same seed should produce same output
+        assert_eq!(output1, output2);
+    }
+
+    // ==================== Buffer Clearing Tests ====================
+
+    #[test]
+    fn test_buffer_cleared_before_processing() {
+        let policy = Policy::SetToA;
+        let sequence = b"ACGT";
+        let mut output = vec![b'X', b'Y', b'Z']; // Pre-fill buffer
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        // Buffer should be cleared and only contain new data
+        assert_eq!(output, b"ACGT");
+    }
+
+    #[test]
+    fn test_multiple_calls_clear_buffer() {
+        let policy = Policy::SetToA;
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        policy.handle(b"ACGT", &mut output, &mut rng).unwrap();
+        assert_eq!(output, b"ACGT");
+
+        policy.handle(b"TT", &mut output, &mut rng).unwrap();
+        assert_eq!(output, b"TT"); // Should only contain second sequence
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[test]
+    fn test_empty_sequence() {
+        let policy = Policy::SetToA;
+        let sequence = b"";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_all_invalid_nucleotides() {
+        let policy = Policy::SetToG;
+        let sequence = b"NNNXXX";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        let should_process = policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert!(should_process);
+        assert_eq!(output, b"GGGGGG"); // All should be replaced with G
+    }
+
+    #[test]
+    fn test_policy_clone() {
+        let policy1 = Policy::SetToA;
+        let policy2 = policy1;
+
+        // Should be able to use both (tests Copy trait)
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        policy1.handle(b"NT", &mut output, &mut rng).unwrap();
+        assert_eq!(output, b"AT");
+
+        policy2.handle(b"NT", &mut output, &mut rng).unwrap();
+        assert_eq!(output, b"AT");
+    }
+
+    #[test]
+    fn test_policy_debug() {
+        let policy = Policy::SetToA;
+        let debug_str = format!("{:?}", policy);
+        assert!(debug_str.contains("SetToA"));
+    }
+
+    // ==================== Various Invalid Character Tests ====================
+
+    #[test]
+    fn test_lowercase_nucleotides_treated_as_invalid() {
+        let policy = Policy::SetToA;
+        let sequence = b"acgt"; // lowercase
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        // Lowercase nucleotides should be treated as invalid
+        assert_eq!(output, b"AAAA");
+    }
+
+    #[test]
+    fn test_mixed_case_nucleotides() {
+        let policy = Policy::SetToC;
+        let sequence = b"AcGt";
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert_eq!(output, b"ACGC"); // Only uppercase are valid
+    }
+
+    #[test]
+    fn test_ambiguous_nucleotide_codes() {
+        let policy = Policy::SetToT;
+        let sequence = b"RYWSMK"; // R, Y, W, S, M, K are ambiguous codes
+        let mut output = Vec::new();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+
+        policy.handle(sequence, &mut output, &mut rng).unwrap();
+
+        assert_eq!(output, b"TTTTTT"); // All ambiguous codes replaced with T
+    }
+}
