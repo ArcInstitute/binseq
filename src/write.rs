@@ -240,6 +240,66 @@ impl BinseqWriterBuilder {
         self
     }
 
+    /// Sets the corresponding values for this builder given an existing BQ header
+    #[must_use]
+    pub fn from_bq_header(header: bq::FileHeader) -> Self {
+        Self {
+            format: Format::Bq,
+            slen: Some(header.slen),
+            xlen: (header.xlen > 0).then_some(header.xlen),
+            bitsize: Some(header.bits),
+            paired: header.is_paired(),
+            flags: header.flags,
+            compression: false,
+            headers: false,
+            quality: false,
+            compression_level: None,
+            block_size: None,
+            headless: false,
+            policy: None,
+        }
+    }
+
+    /// Sets the corresponding values for this builder given an existing VBQ header
+    #[must_use]
+    pub fn from_vbq_header(header: vbq::FileHeader) -> Self {
+        Self {
+            format: Format::Vbq,
+            slen: None,
+            xlen: None,
+            flags: header.flags,
+            quality: header.qual,
+            paired: header.paired,
+            bitsize: Some(header.bits),
+            headers: header.headers,
+            compression: header.compressed,
+            block_size: Some(header.block as usize),
+            policy: None,
+            compression_level: None,
+            headless: false,
+        }
+    }
+
+    /// Sets the corresponding values for this builder given an existing CBQ header
+    #[must_use]
+    pub fn from_cbq_header(header: cbq::FileHeader) -> Self {
+        Self {
+            format: Format::Cbq,
+            flags: header.has_flags(),
+            quality: header.has_qualities(),
+            headers: header.has_headers(),
+            paired: header.is_paired(),
+            block_size: Some(header.block_size as usize),
+            compression_level: Some(header.compression_level as i32),
+            compression: false,
+            slen: None,
+            xlen: None,
+            bitsize: None,
+            policy: None,
+            headless: false,
+        }
+    }
+
     /// Encode FASTX file(s) to BINSEQ format
     ///
     /// This method returns a [`FastxEncoderBuilder`] that allows you to configure
@@ -317,7 +377,7 @@ impl BinseqWriterBuilder {
             0
         };
 
-        let mut header_builder = bq::BinseqHeaderBuilder::new().slen(slen).xlen(xlen);
+        let mut header_builder = bq::FileHeaderBuilder::new().slen(slen).xlen(xlen);
 
         if let Some(bitsize) = self.bitsize {
             header_builder = header_builder.bitsize(bitsize);
@@ -327,7 +387,7 @@ impl BinseqWriterBuilder {
 
         let header = header_builder.build()?;
 
-        let inner = bq::BinseqWriterBuilder::default()
+        let inner = bq::WriterBuilder::default()
             .header(header)
             .policy(self.policy.unwrap_or_default())
             .headless(self.headless)
@@ -337,7 +397,7 @@ impl BinseqWriterBuilder {
     }
 
     fn build_vbq<W: Write>(self, writer: W) -> Result<BinseqWriter<W>> {
-        let mut header_builder = vbq::VBinseqHeaderBuilder::new()
+        let mut header_builder = vbq::FileHeaderBuilder::new()
             .paired(self.paired)
             .qual(self.quality)
             .headers(self.headers)
@@ -354,7 +414,7 @@ impl BinseqWriterBuilder {
 
         let header = header_builder.build();
 
-        let inner = vbq::VBinseqWriterBuilder::default()
+        let inner = vbq::WriterBuilder::default()
             .header(header)
             .policy(self.policy.unwrap_or_default())
             .headless(self.headless)
@@ -389,9 +449,9 @@ impl BinseqWriterBuilder {
 /// a unified interface for writing sequence data.
 pub enum BinseqWriter<W: Write> {
     /// BQ format writer
-    Bq(bq::BinseqWriter<W>),
+    Bq(bq::Writer<W>),
     /// VBQ format writer
-    Vbq(vbq::VBinseqWriter<W>),
+    Vbq(vbq::Writer<W>),
     /// CBQ format writer
     Cbq(cbq::ColumnarBlockWriter<W>),
 }
@@ -520,7 +580,7 @@ impl<W: Write> BinseqWriter<W> {
     pub fn new_headless_buffer(&self) -> Result<BinseqWriter<Vec<u8>>> {
         match self {
             Self::Bq(w) => {
-                let inner = bq::BinseqWriterBuilder::default()
+                let inner = bq::WriterBuilder::default()
                     .header(w.header())
                     .policy(w.policy())
                     .headless(true)
@@ -528,7 +588,7 @@ impl<W: Write> BinseqWriter<W> {
                 Ok(BinseqWriter::Bq(inner))
             }
             Self::Vbq(w) => {
-                let inner = vbq::VBinseqWriterBuilder::default()
+                let inner = vbq::WriterBuilder::default()
                     .header(w.header())
                     .policy(w.policy())
                     .headless(true)

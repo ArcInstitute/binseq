@@ -43,7 +43,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use zstd::{Decoder, Encoder};
 
 use super::{
-    BlockHeader, VBinseqHeader,
+    BlockHeader, FileHeader,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
 use crate::error::{IndexError, Result};
@@ -61,13 +61,13 @@ pub const INDEX_END_MAGIC: u64 = 0x444E455845444E49;
 /// Index Block Reservation
 pub const INDEX_RESERVATION: [u8; 4] = [42; 4];
 
-/// Descriptor of the dimensions of a block in a VBINSEQ file
+/// Descriptor of the dimensions of a block in a VBQ file
 ///
-/// A `BlockRange` contains metadata about a single block within a VBINSEQ file,
+/// A `BlockRange` contains metadata about a single block within a VBQ file,
 /// including its position, size, and record count. This information enables
 /// efficient random access to blocks without scanning the entire file.
 ///
-/// Block ranges are stored in a `BlockIndex` to form a complete index of a VBINSEQ file.
+/// Block ranges are stored in a `BlockIndex` to form a complete index of a VBQ file.
 /// Each range is serialized to a fixed-size 32-byte structure when stored in the embedded index.
 ///
 /// ## Format Changes (v0.7.0+)
@@ -249,22 +249,22 @@ impl BlockRange {
     }
 }
 
-/// Header for a VBINSEQ index file
+/// Header for a VBQ index file
 ///
 /// The `IndexHeader` contains metadata about an index file, including a magic number
 /// for validation and the size of the indexed file. This allows verifying that an index
-/// file matches its corresponding VBINSEQ file.
+/// file matches its corresponding VBQ file.
 ///
 /// The header has a fixed size of 32 bytes to ensure compatibility across versions.
 #[derive(Debug, Clone, Copy)]
 pub struct IndexHeader {
     /// Magic number to designate the index file ("VBQINDEX" in ASCII)
     ///
-    /// This is used to verify that a file is indeed a VBINSEQ index file.
+    /// This is used to verify that a file is indeed a VBQ index file.
     /// (8 bytes in serialized form)
     magic: u64,
 
-    /// Total size of the indexed VBINSEQ file in bytes
+    /// Total size of the indexed VBQ file in bytes
     ///
     /// This is used to verify that the index matches the file it references.
     /// (8 bytes in serialized form)
@@ -276,11 +276,11 @@ pub struct IndexHeader {
     reserved: [u8; INDEX_HEADER_SIZE - 16],
 }
 impl IndexHeader {
-    /// Creates a new index header for a VBINSEQ file of the specified size
+    /// Creates a new index header for a VBQ file of the specified size
     ///
     /// # Parameters
     ///
-    /// * `bytes` - The total size of the VBINSEQ file being indexed, in bytes
+    /// * `bytes` - The total size of the VBQ file being indexed, in bytes
     ///
     /// # Returns
     ///
@@ -296,7 +296,7 @@ impl IndexHeader {
     ///
     /// This method reads 32 bytes from the provided reader and deserializes them
     /// into an `IndexHeader`. It validates the magic number to ensure that the file
-    /// is indeed a VBINSEQ index file.
+    /// is indeed a VBQ index file.
     ///
     /// # Parameters
     ///
@@ -367,14 +367,14 @@ impl IndexHeader {
     }
 }
 
-/// Complete index for a VBINSEQ file
+/// Complete index for a VBQ file
 ///
-/// A `BlockIndex` contains metadata about a VBINSEQ file and all of its blocks,
+/// A `BlockIndex` contains metadata about a VBQ file and all of its blocks,
 /// enabling efficient random access and parallel processing. It consists of an
 /// `IndexHeader` and a collection of `BlockRange` entries, one for each block in
 /// the file.
 ///
-/// The index can be created by scanning a VBINSEQ file or loaded from a previously
+/// The index can be created by scanning a VBQ file or loaded from a previously
 /// created index file. Once loaded, it provides information about block locations,
 /// sizes, and record counts.
 ///
@@ -384,7 +384,7 @@ impl IndexHeader {
 /// use binseq::vbq::{BlockIndex, MmapReader};
 /// use std::path::Path;
 ///
-/// // Create an index from a VBINSEQ file
+/// // Create an index from a VBQ file
 /// let vbq_path = Path::new("example.vbq");
 /// let index = BlockIndex::from_vbq(vbq_path).unwrap();
 ///
@@ -425,7 +425,7 @@ impl BlockIndex {
     ///
     /// # Returns
     ///
-    /// The number of blocks in the VBINSEQ file described by this index
+    /// The number of blocks in the VBQ file described by this index
     ///
     /// # Examples
     ///
@@ -445,7 +445,7 @@ impl BlockIndex {
     /// Saves the index to a file
     ///
     /// This writes the index header and all block ranges to a file, which can be loaded
-    /// later to avoid rescanning the VBINSEQ file. The index is compressed to reduce
+    /// later to avoid rescanning the VBQ file. The index is compressed to reduce
     /// storage space.
     ///
     /// # Parameters
@@ -463,7 +463,7 @@ impl BlockIndex {
     /// use binseq::vbq::BlockIndex;
     /// use std::path::Path;
     ///
-    /// // Create an index from a VBINSEQ file
+    /// // Create an index from a VBQ file
     /// let index = BlockIndex::from_vbq(Path::new("example.vbq")).unwrap();
     ///
     /// // Save it for future use
@@ -521,15 +521,15 @@ impl BlockIndex {
         self.ranges.push(range);
     }
 
-    /// Creates a new index by scanning a VBINSEQ file
+    /// Creates a new index by scanning a VBQ file
     ///
-    /// This method memory-maps the specified VBINSEQ file and scans it block by block
+    /// This method memory-maps the specified VBQ file and scans it block by block
     /// to create an index. The index can then be saved to a file for future use, enabling
     /// efficient random access without rescanning the file.
     ///
     /// # Parameters
     ///
-    /// * `path` - Path to the VBINSEQ file to index
+    /// * `path` - Path to the VBQ file to index
     ///
     /// # Returns
     ///
@@ -542,7 +542,7 @@ impl BlockIndex {
     /// use binseq::vbq::BlockIndex;
     /// use std::path::Path;
     ///
-    /// // Create an index from a VBINSEQ file
+    /// // Create an index from a VBQ file
     /// let index = BlockIndex::from_vbq(Path::new("example.vbq")).unwrap();
     ///
     /// // Save the index for future use
@@ -572,7 +572,7 @@ impl BlockIndex {
         let _header = {
             let mut header_bytes = [0u8; SIZE_HEADER];
             header_bytes.copy_from_slice(&mmap[..SIZE_HEADER]);
-            VBinseqHeader::from_bytes(&header_bytes)?
+            FileHeader::from_bytes(&header_bytes)?
         };
 
         // Initialize position after the header

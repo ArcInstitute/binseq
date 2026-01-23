@@ -2,9 +2,9 @@
 //!
 //! *.bq files are BINSEQ variants for **fixed-length** records and **does not support quality scores**.
 //!
-//! For variable-length records and optional quality scores use the [`vbq`](crate::vbq) module.
+//! For variable-length records and optional quality scores use the [`cbq`](crate::cbq) or [`vbq`](crate::vbq) modules.
 //!
-//! This module contains the utilities for reading, writing, and interacting with BINSEQ files.
+//! This module contains the utilities for reading, writing, and interacting with BQ files.
 //!
 //! For detailed information on the file format, see our [paper](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1).
 //!
@@ -46,11 +46,11 @@
 //! // Create an in-memory buffer for output
 //! let output_handle = Cursor::new(Vec::new());
 //!
-//! // Initialize our BINSEQ header (64 bp, only primary)
-//! let header = bq::BinseqHeaderBuilder::new().slen(64).build().unwrap();
+//! // Initialize our BQ header (64 bp, only primary)
+//! let header = bq::FileHeaderBuilder::new().slen(64).build().unwrap();
 //!
-//! // Initialize our BINSEQ writer
-//! let mut writer = bq::BinseqWriterBuilder::default()
+//! // Initialize our BQ writer
+//! let mut writer = bq::WriterBuilder::default()
 //!     .header(header)
 //!     .build(output_handle)
 //!     .unwrap();
@@ -79,11 +79,11 @@
 //! // Create an in-memory buffer for output
 //! let output_handle = Cursor::new(Vec::new());
 //!
-//! // Initialize our BINSEQ header (64 bp and 128bp)
-//! let header = bq::BinseqHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
+//! // Initialize our BQ header (64 bp and 128bp)
+//! let header = bq::FileHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
 //!
-//! // Initialize our BINSEQ writer
-//! let mut writer = bq::BinseqWriterBuilder::default()
+//! // Initialize our BQ writer
+//! let mut writer = bq::WriterBuilder::default()
 //!     .header(header)
 //!     .build(output_handle)
 //!     .unwrap();
@@ -109,12 +109,12 @@
 //!
 //! ```
 //! use binseq::{Policy, Result, BinseqRecord, SequencingRecordBuilder};
-//! use binseq::bq::{BinseqHeaderBuilder, StreamReader, StreamWriterBuilder};
+//! use binseq::bq::{FileHeaderBuilder, StreamReader, StreamWriterBuilder};
 //! use std::io::{BufReader, Cursor};
 //!
 //! fn main() -> Result<()> {
 //!     // Create a header for sequences of length 100
-//!     let header = BinseqHeaderBuilder::new().slen(100).build()?;
+//!     let header = FileHeaderBuilder::new().slen(100).build()?;
 //!
 //!     // Create a stream writer
 //!     let mut writer = StreamWriterBuilder::default()
@@ -150,7 +150,7 @@
 //!
 //! ## BQ file format
 //!
-//! A BINSEQ file consists of two sections:
+//! A BQ file consists of two sections:
 //!
 //! 1. Fixed-size header (32 bytes)
 //! 2. Record data section
@@ -241,6 +241,6 @@ mod header;
 mod reader;
 mod writer;
 
-pub use header::{BinseqHeader, BinseqHeaderBuilder, SIZE_HEADER};
+pub use header::{FileHeader, FileHeaderBuilder, SIZE_HEADER};
 pub use reader::{MmapReader, RefRecord, StreamReader};
-pub use writer::{BinseqWriter, BinseqWriterBuilder, Encoder, StreamWriter, StreamWriterBuilder};
+pub use writer::{Encoder, StreamWriter, StreamWriterBuilder, Writer, WriterBuilder};
