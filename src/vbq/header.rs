@@ -1,10 +1,10 @@
 //! # File and Block Header Definitions
 //!
-//! This module defines the header structures used in the VBINSEQ file format.
+//! This module defines the header structures used in the VBQ file format.
 //!
-//! The VBINSEQ format consists of two primary header types:
+//! The VBQ format consists of two primary header types:
 //!
-//! 1. `FileHeader` - The file header that appears at the beginning of a VBINSEQ file,
+//! 1. `FileHeader` - The file header that appears at the beginning of a VBQ file,
 //!    containing information about the overall file format and configuration.
 //!
 //! 2. `BlockHeader` - Headers that appear before each block of records, containing
@@ -21,7 +21,7 @@ use crate::error::{HeaderError, ReadError, Result};
 
 /// Magic number for file identification: "VSEQ" in ASCII (0x51455356)
 ///
-/// This constant is used in the file header to identify VBINSEQ formatted files.
+/// This constant is used in the file header to identify VBQ formatted files.
 #[allow(clippy::unreadable_literal)]
 const MAGIC: u32 = 0x51455356;
 
@@ -126,10 +126,10 @@ impl FileHeaderBuilder {
     }
 }
 
-/// File header for VBINSEQ files
+/// File header for VBQ files
 ///
 /// This structure represents the 32-byte header that appears at the beginning of every
-/// VBINSEQ file. It contains configuration information about the file format, including
+/// VBQ file. It contains configuration information about the file format, including
 /// whether quality scores are included, whether blocks are compressed, and whether
 /// records contain paired sequences.
 ///
@@ -221,7 +221,7 @@ impl Default for FileHeader {
     }
 }
 impl FileHeader {
-    /// Creates a new VBINSEQ header with the default block size
+    /// Creates a new VBQ header with the default block size
     ///
     /// # Parameters
     ///
@@ -256,7 +256,7 @@ impl FileHeader {
         )
     }
 
-    /// Creates a new VBINSEQ header with a custom block size
+    /// Creates a new VBQ header with a custom block size
     ///
     /// # Parameters
     ///
@@ -425,9 +425,9 @@ impl FileHeader {
     }
 }
 
-/// Block header for VBINSEQ block data
+/// Block header for VBQ block data
 ///
-/// Each block in a VBINSEQ file is preceded by a 32-byte block header that contains
+/// Each block in a VBQ file is preceded by a 32-byte block header that contains
 /// information about the block including its size and the number of records it contains.
 ///
 /// # Fields

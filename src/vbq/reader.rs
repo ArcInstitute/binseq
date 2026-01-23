@@ -1,6 +1,6 @@
-//! Reader implementation for VBINSEQ files
+//! Reader implementation for VBQ files
 //!
-//! This module provides functionality for reading sequence data from VBINSEQ files,
+//! This module provides functionality for reading sequence data from VBQ files,
 //! including support for compressed blocks, quality scores, paired-end reads, and sequence headers.
 //!
 //! ## Format Changes (v0.7.0+)
@@ -132,9 +132,9 @@ struct RecordMetadata {
     has_quality: bool,
 }
 
-/// A container for a block of VBINSEQ records
+/// A container for a block of VBQ records
 ///
-/// The `RecordBlock` struct represents a single block of records read from a VBINSEQ file.
+/// The `RecordBlock` struct represents a single block of records read from a VBQ file.
 /// It stores the raw data for multiple records in vectors, allowing efficient iteration
 /// over the records without copying memory for each record.
 ///
@@ -193,7 +193,7 @@ pub struct RecordBlock {
 impl RecordBlock {
     /// Creates a new empty `RecordBlock` with the specified block size
     ///
-    /// The block size should match the one specified in the VBINSEQ file header
+    /// The block size should match the one specified in the VBQ file header
     /// for proper operation. This is typically handled automatically when using
     /// `MmapReader::new_block()`.
     ///
@@ -727,9 +727,9 @@ impl BinseqRecord for RefRecord<'_> {
     }
 }
 
-/// Memory-mapped reader for VBINSEQ files
+/// Memory-mapped reader for VBQ files
 ///
-/// [`MmapReader`] provides efficient, memory-mapped access to VBINSEQ files. It allows
+/// [`MmapReader`] provides efficient, memory-mapped access to VBQ files. It allows
 /// sequential reading of record blocks and supports parallel processing of records.
 ///
 /// ## Format Support (v0.7.0+)
@@ -743,7 +743,7 @@ impl BinseqRecord for RefRecord<'_> {
 /// which can be more efficient than standard file I/O, especially for large files.
 ///
 /// The [`MmapReader`] is designed to be used in a multi-threaded environment, and it
-/// is built around [`RecordBlock`]s which are the units of data in a VBINSEQ file.
+/// is built around [`RecordBlock`]s which are the units of data in a VBQ file.
 /// Each one would be held by a separate thread and would load data from the shared
 /// [`MmapReader`] through the [`MmapReader::read_block_into`] method. However, they can
 /// also be used in a single-threaded environment for sequential processing.
@@ -792,7 +792,7 @@ impl BinseqRecord for RefRecord<'_> {
 /// }
 /// ```
 pub struct MmapReader {
-    /// Path to the VBINSEQ file
+    /// Path to the VBQ file
     path: PathBuf,
 
     /// Memory-mapped file contents for efficient access
@@ -814,10 +814,10 @@ pub struct MmapReader {
     default_quality_score: u8,
 }
 impl MmapReader {
-    /// Creates a new `MmapReader` for a VBINSEQ file
+    /// Creates a new `MmapReader` for a VBQ file
     ///
     /// This method opens the specified file, memory-maps its contents, reads the
-    /// VBINSEQ header information, and loads the embedded index. The reader is positioned
+    /// VBQ header information, and loads the embedded index. The reader is positioned
     /// at the beginning of the first record block after the header.
     ///
     /// ## Index Loading (v0.7.0+)
@@ -828,7 +828,7 @@ impl MmapReader {
     ///
     /// # Parameters
     ///
-    /// * `path` - Path to the VBINSEQ file to open
+    /// * `path` - Path to the VBQ file to open
     ///
     /// # Returns
     ///
@@ -838,7 +838,7 @@ impl MmapReader {
     ///
     /// * `ReadError::InvalidFileType` if the path doesn't point to a regular file
     /// * I/O errors if the file can't be opened or memory-mapped
-    /// * Header validation errors if the file doesn't contain a valid VBINSEQ header
+    /// * Header validation errors if the file doesn't contain a valid VBQ header
     ///
     /// # Examples
     ///
@@ -924,7 +924,7 @@ impl MmapReader {
     /// Returns the path where the index file would be located
     ///
     /// The index file is used for random access to blocks and has the same path as
-    /// the VBINSEQ file with the ".vqi" extension appended.
+    /// the VBQ file with the ".vqi" extension appended.
     ///
     /// # Returns
     ///
@@ -976,7 +976,7 @@ impl MmapReader {
     /// This method reads the next block of records from the current position in the file
     /// and populates the provided `RecordBlock` with the data. The block is cleared and reused
     /// to avoid unnecessary memory allocations. This is the primary method for sequential
-    /// reading of VBINSEQ files.
+    /// reading of VBQ files.
     ///
     /// The method automatically handles decompression if the file was written with
     /// compression enabled and updates the total record count as it progresses through the file.
@@ -1080,12 +1080,12 @@ impl MmapReader {
         Ok(true)
     }
 
-    /// Loads or creates the block index for this VBINSEQ file
+    /// Loads or creates the block index for this VBQ file
     ///
     /// The block index provides metadata about each block in the file, enabling
     /// random access to blocks and parallel processing. This method first attempts to
     /// load an existing index file. If the index doesn't exist or doesn't match the
-    /// current file, it automatically generates a new index from the VBINSEQ file
+    /// current file, it automatically generates a new index from the VBQ file
     /// and saves it for future use.
     ///
     /// # Returns
@@ -1095,7 +1095,7 @@ impl MmapReader {
     /// # Errors
     ///
     /// * File I/O errors when reading or creating the index
-    /// * Parsing errors if the VBINSEQ file has invalid format
+    /// * Parsing errors if the VBQ file has invalid format
     /// * Other index-related errors that cannot be resolved by creating a new index
     ///
     /// # Examples
@@ -1114,7 +1114,7 @@ impl MmapReader {
     ///
     /// # Notes
     ///
-    /// The index file is stored with the same path as the VBINSEQ file but with a ".vqi"
+    /// The index file is stored with the same path as the VBQ file but with a ".vqi"
     /// extension appended. This allows for reusing the index across multiple runs,
     /// which can significantly improve startup performance for large files.
     pub fn load_index(&self) -> Result<BlockIndex> {
@@ -1149,7 +1149,7 @@ impl MmapReader {
 impl ParallelReader for MmapReader {
     /// Processes all records in the file in parallel using multiple threads
     ///
-    /// This method provides efficient parallel processing of VBINSEQ files by distributing
+    /// This method provides efficient parallel processing of VBQ files by distributing
     /// blocks across multiple worker threads. The file's block structure is leveraged to divide
     /// the work evenly without requiring thread synchronization during processing, which leads
     /// to near-linear scaling with the number of threads.
@@ -1226,7 +1226,7 @@ impl ParallelReader for MmapReader {
     ///     }
     /// }
     ///
-    /// // Use the processor with a VBINSEQ file
+    /// // Use the processor with a VBQ file
     /// let reader = MmapReader::new("example.vbq").unwrap();
     /// let counter = RecordCounter::new();
     ///

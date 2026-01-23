@@ -166,7 +166,7 @@ pub enum ReadError {
     #[error("Unable to find an expected full block at position {0}")]
     UnexpectedEndOfFile(usize),
 
-    /// When the file metadata doesn't match the expected VBINSEQ format
+    /// When the file metadata doesn't match the expected VBQ format
     #[error("Unexpected file metadata")]
     InvalidFileType,
 
@@ -264,7 +264,7 @@ pub enum WriteError {
     /// When trying to ingest data with an incompatible header
     ///
     /// The first parameter is the expected header, the second is the found header
-    #[error("Incompatible headers found in VBinseqWriter::ingest. Found ({1:?}) Expected ({0:?})")]
+    #[error("Incompatible headers found in vbq::Writer::ingest. Found ({1:?}) Expected ({0:?})")]
     IncompatibleHeaders(crate::vbq::FileHeader, crate::vbq::FileHeader),
 
     /// When building a `SequencingRecord` without a primary sequence
@@ -272,9 +272,9 @@ pub enum WriteError {
     MissingSequence,
 }
 
-/// Errors related to VBINSEQ file indexing
+/// Errors related to VBQ file indexing
 ///
-/// These errors occur when there are issues with the index of a VBINSEQ file,
+/// These errors occur when there are issues with the index of a VBQ file,
 /// such as corruption or mismatches with the underlying file.
 #[derive(thiserror::Error, Debug)]
 pub enum IndexError {

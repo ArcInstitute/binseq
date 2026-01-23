@@ -1,9 +1,9 @@
-//! Writer implementation for VBINSEQ files
+//! Writer implementation for VBQ files
 //!
-//! This module provides functionality for writing sequence data to VBINSEQ files,
+//! This module provides functionality for writing sequence data to VBQ files,
 //! including support for compression, quality scores, paired-end reads, and sequence headers.
 //!
-//! The VBINSEQ writer implements a block-based approach where records are packed
+//! The VBQ writer implements a block-based approach where records are packed
 //! into fixed-size blocks. Each block has a header containing metadata about the
 //! records it contains. Blocks may be optionally compressed using zstd compression.
 //!
@@ -33,7 +33,7 @@
 //! use binseq::SequencingRecordBuilder;
 //! use std::fs::File;
 //!
-//! // Create a VBINSEQ file writer with headers and compression
+//! // Create a VBQ file writer with headers and compression
 //! let file = File::create("example.vbq").unwrap();
 //! let header = FileHeaderBuilder::new()
 //!     .block(128 * 1024)
@@ -115,7 +115,7 @@ pub struct WriterBuilder {
     headless: Option<bool>,
 }
 impl WriterBuilder {
-    /// Sets the header for the VBINSEQ file
+    /// Sets the header for the VBQ file
     ///
     /// The header defines the file format parameters such as block size, whether
     /// the file contains quality scores, paired-end reads, and compression settings.
@@ -241,15 +241,15 @@ impl WriterBuilder {
     }
 }
 
-/// Writer for VBINSEQ format files
+/// Writer for VBQ format files
 ///
-/// The `Writer` handles writing nucleotide sequence data to VBINSEQ files in a
+/// The `Writer` handles writing nucleotide sequence data to VBQ files in a
 /// block-based format. It manages the file structure, compression settings, and ensures
 /// data is properly encoded and organized.
 ///
 /// ## File Structure
 ///
-/// A VBINSEQ file consists of:
+/// A VBQ file consists of:
 /// 1. A file header that defines parameters like block size and compression settings
 /// 2. A series of blocks, each with:
 ///    - A block header with metadata (e.g., record count)

@@ -1,15 +1,15 @@
-//! # VBINSEQ Format
+//! # VBQ Format
 //!
-//! VBINSEQ is a high-performance binary format for variable-length nucleotide sequences
+//! VBQ is a high-performance binary format for variable-length nucleotide sequences
 //! that optimizes both storage efficiency and parallel processing capabilities.
 //!
 //! For more information on the format, please refer to our [preprint](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1).
 //!
 //! ## Overview
 //!
-//! VBINSEQ extends the core principles of BINSEQ to accommodate:
+//! VBQ extends the core principles of BINSEQ to accommodate:
 //!
-//! * **Variable-length sequences**: Unlike BINSEQ which requires fixed-length reads, VBINSEQ can store
+//! * **Variable-length sequences**: Unlike BINSEQ which requires fixed-length reads, VBQ can store
 //!   sequences of any length, making it suitable for technologies like PacBio and Oxford Nanopore.
 //!
 //! * **Quality scores**: Optional storage of quality scores alongside nucleotide data when needed.
@@ -30,7 +30,7 @@
 //!
 //! ## File Structure
 //!
-//! A VBINSEQ file consists of a 32-byte header followed by record blocks and an embedded index:
+//! A VBQ file consists of a 32-byte header followed by record blocks and an embedded index:
 //!
 //! ```text
 //! ┌───────────────────┐
@@ -78,7 +78,7 @@
 //!
 //! ## Performance Characteristics
 //!
-//! VBINSEQ is designed for high-throughput parallel processing:
+//! VBQ is designed for high-throughput parallel processing:
 //!
 //! * Independent blocks enable true parallel processing without synchronization
 //! * Memory-mapped access provides efficient I/O
