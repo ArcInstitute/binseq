@@ -17,7 +17,7 @@ use bitnuc::BitSize;
 use bytemuck::cast_slice;
 use memmap2::Mmap;
 
-use super::header::{BinseqHeader, SIZE_HEADER};
+use super::header::{FileHeader, SIZE_HEADER};
 use crate::{
     BinseqRecord, DEFAULT_QUALITY_SCORE, Error, ParallelProcessor, ParallelReader,
     error::{ReadError, Result},
@@ -298,12 +298,12 @@ impl RecordConfig {
     ///
     /// # Arguments
     ///
-    /// * `header` - A reference to a `BinseqHeader` containing sequence lengths
+    /// * `header` - A reference to a `FileHeader` containing sequence lengths
     ///
     /// # Returns
     ///
     /// A new `RecordConfig` instance with the sequence lengths from the header
-    pub fn from_header(header: &BinseqHeader) -> Self {
+    pub fn from_header(header: &FileHeader) -> Self {
         Self::new(
             header.slen as usize,
             header.xlen as usize,
@@ -411,7 +411,7 @@ pub struct MmapReader {
     mmap: Arc<Mmap>,
 
     /// Binary sequence file header containing format information
-    header: BinseqHeader,
+    header: FileHeader,
 
     /// Configuration defining the layout of records in the file
     config: RecordConfig,
@@ -456,7 +456,7 @@ impl MmapReader {
         let mmap = unsafe { Mmap::map(&file)? };
 
         // Read header from mapped memory
-        let header = BinseqHeader::from_buffer(&mmap)?;
+        let header = FileHeader::from_buffer(&mmap)?;
 
         // Record configuraration
         let config = RecordConfig::from_header(&header);
@@ -491,7 +491,7 @@ impl MmapReader {
     ///
     /// The header contains format information and sequence length specifications.
     #[must_use]
-    pub fn header(&self) -> BinseqHeader {
+    pub fn header(&self) -> FileHeader {
         self.header
     }
 
@@ -580,7 +580,7 @@ pub struct StreamReader<R: Read> {
     reader: R,
 
     /// Binary sequence file header containing format information
-    header: Option<BinseqHeader>,
+    header: Option<FileHeader>,
 
     /// Configuration defining the layout of records in the file
     config: Option<RecordConfig>,
@@ -659,7 +659,7 @@ impl<R: Read> StreamReader<R> {
     ///
     /// # Returns
     ///
-    /// * `Ok(&BinseqHeader)` - A reference to the validated header
+    /// * `Ok(&FileHeader)` - A reference to the validated header
     /// * `Err(Error)` - If reading or validating the header fails
     ///
     /// # Panics
@@ -672,7 +672,7 @@ impl<R: Read> StreamReader<R> {
     /// * There is an I/O error when reading from the source
     /// * The header data is invalid
     /// * End of stream is reached before the full header can be read
-    pub fn read_header(&mut self) -> Result<&BinseqHeader> {
+    pub fn read_header(&mut self) -> Result<&FileHeader> {
         if self.header.is_some() {
             return Ok(self
                 .header
@@ -687,7 +687,7 @@ impl<R: Read> StreamReader<R> {
 
         // Parse header
         let header_slice = &self.buffer[self.buffer_pos..self.buffer_pos + SIZE_HEADER];
-        let header = BinseqHeader::from_buffer(header_slice)?;
+        let header = FileHeader::from_buffer(header_slice)?;
 
         self.header = Some(header);
         self.config = Some(RecordConfig::from_header(&header));

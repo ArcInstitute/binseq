@@ -47,7 +47,7 @@
 //! let output_handle = Cursor::new(Vec::new());
 //!
 //! // Initialize our BINSEQ header (64 bp, only primary)
-//! let header = bq::BinseqHeaderBuilder::new().slen(64).build().unwrap();
+//! let header = bq::FileHeaderBuilder::new().slen(64).build().unwrap();
 //!
 //! // Initialize our BINSEQ writer
 //! let mut writer = bq::BinseqWriterBuilder::default()
@@ -80,7 +80,7 @@
 //! let output_handle = Cursor::new(Vec::new());
 //!
 //! // Initialize our BINSEQ header (64 bp and 128bp)
-//! let header = bq::BinseqHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
+//! let header = bq::FileHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
 //!
 //! // Initialize our BINSEQ writer
 //! let mut writer = bq::BinseqWriterBuilder::default()
@@ -109,12 +109,12 @@
 //!
 //! ```
 //! use binseq::{Policy, Result, BinseqRecord, SequencingRecordBuilder};
-//! use binseq::bq::{BinseqHeaderBuilder, StreamReader, StreamWriterBuilder};
+//! use binseq::bq::{FileHeaderBuilder, StreamReader, StreamWriterBuilder};
 //! use std::io::{BufReader, Cursor};
 //!
 //! fn main() -> Result<()> {
 //!     // Create a header for sequences of length 100
-//!     let header = BinseqHeaderBuilder::new().slen(100).build()?;
+//!     let header = FileHeaderBuilder::new().slen(100).build()?;
 //!
 //!     // Create a stream writer
 //!     let mut writer = StreamWriterBuilder::default()
@@ -241,6 +241,6 @@ mod header;
 mod reader;
 mod writer;
 
-pub use header::{BinseqHeader, BinseqHeaderBuilder, SIZE_HEADER};
+pub use header::{FileHeader, FileHeaderBuilder, SIZE_HEADER};
 pub use reader::{MmapReader, RefRecord, StreamReader};
 pub use writer::{BinseqWriter, BinseqWriterBuilder, Encoder, StreamWriter, StreamWriterBuilder};

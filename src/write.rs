@@ -242,7 +242,7 @@ impl BinseqWriterBuilder {
 
     /// Sets the corresponding values for this builder given an existing BQ header
     #[must_use]
-    pub fn from_bq_header(header: bq::BinseqHeader) -> Self {
+    pub fn from_bq_header(header: bq::FileHeader) -> Self {
         Self {
             format: Format::Bq,
             slen: Some(header.slen),
@@ -377,7 +377,7 @@ impl BinseqWriterBuilder {
             0
         };
 
-        let mut header_builder = bq::BinseqHeaderBuilder::new().slen(slen).xlen(xlen);
+        let mut header_builder = bq::FileHeaderBuilder::new().slen(slen).xlen(xlen);
 
         if let Some(bitsize) = self.bitsize {
             header_builder = header_builder.bitsize(bitsize);
