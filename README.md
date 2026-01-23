@@ -10,13 +10,15 @@
 BINSEQ is a binary file format family designed for efficient storage and processing of DNA sequences.
 They make use of two-bit encoding for nucleotides and are optimized for high-performance parallel processing.
 
-BINSEQ currently has three variants:
+BINSEQ has three variants:
 
 1. **BQ**: (`*.bq`) files are for _fixed-length_ records **without** quality scores.
 2. **VBQ**: (`*.vbq`) files are for _variable-length_ records **with optional** quality scores and headers.
 3. **CBQ**: (`*.cbq`) files are for _columnar variable-length_ records **with optional** quality scores and headers.
 
 All variants support both single and paired sequences.
+
+> Note: For most use cases, the newest variant _CBQ_ is recommended due to its flexibility, storage efficiency, and decoding speed. It supersedes _VBQ_ in terms of performance and storage efficiency, at a small cost in encoding speed. VBQ is still supported for legacy reasons but newer projects should consider using _CBQ_ instead.
 
 ## Getting Started
 
