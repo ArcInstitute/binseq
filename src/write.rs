@@ -240,6 +240,66 @@ impl BinseqWriterBuilder {
         self
     }
 
+    /// Sets the corresponding values for this builder given an existing BQ header
+    #[must_use]
+    pub fn from_bq_header(header: bq::BinseqHeader) -> Self {
+        Self {
+            format: Format::Bq,
+            slen: Some(header.slen),
+            xlen: (header.xlen > 0).then_some(header.xlen),
+            bitsize: Some(header.bits),
+            paired: header.is_paired(),
+            flags: header.flags,
+            compression: false,
+            headers: false,
+            quality: false,
+            compression_level: None,
+            block_size: None,
+            headless: false,
+            policy: None,
+        }
+    }
+
+    /// Sets the corresponding values for this builder given an existing VBQ header
+    #[must_use]
+    pub fn from_vbq_header(header: vbq::VBinseqHeader) -> Self {
+        Self {
+            format: Format::Vbq,
+            slen: None,
+            xlen: None,
+            flags: header.flags,
+            quality: header.qual,
+            paired: header.paired,
+            bitsize: Some(header.bits),
+            headers: header.headers,
+            compression: header.compressed,
+            block_size: Some(header.block as usize),
+            policy: None,
+            compression_level: None,
+            headless: false,
+        }
+    }
+
+    /// Sets the corresponding values for this builder given an existing CBQ header
+    #[must_use]
+    pub fn from_cbq_header(header: cbq::FileHeader) -> Self {
+        Self {
+            format: Format::Cbq,
+            flags: header.has_flags(),
+            quality: header.has_qualities(),
+            headers: header.has_headers(),
+            paired: header.is_paired(),
+            block_size: Some(header.block_size as usize),
+            compression_level: Some(header.compression_level as i32),
+            compression: false,
+            slen: None,
+            xlen: None,
+            bitsize: None,
+            policy: None,
+            headless: false,
+        }
+    }
+
     /// Encode FASTX file(s) to BINSEQ format
     ///
     /// This method returns a [`FastxEncoderBuilder`] that allows you to configure
