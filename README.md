@@ -18,7 +18,9 @@ BINSEQ has three variants:
 
 All variants support both single and paired sequences.
 
-> Note: For most use cases, the newest variant _CBQ_ is recommended due to its flexibility, storage efficiency, and decoding speed. It supersedes _VBQ_ in terms of performance and storage efficiency, at a small cost in encoding speed. VBQ is still supported for legacy reasons but newer projects should consider using _CBQ_ instead.
+**Note:** For most use cases, the newest variant _CBQ_ is recommended due to its flexibility, storage efficiency, and decoding speed.
+It supersedes _VBQ_ in terms of performance and storage efficiency, at a small cost in encoding speed.
+VBQ is still supported for legacy reasons but newer projects should consider using _CBQ_ instead.
 
 ## Getting Started
 
