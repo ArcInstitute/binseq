@@ -529,7 +529,11 @@ impl MmapReader {
     /// Returns an error if the requested index is beyond the number of records in the file
     pub fn get(&self, idx: usize) -> Result<RefRecord<'_>> {
         if idx > self.num_records() {
-            return Err(ReadError::OutOfRange(idx, self.num_records()).into());
+            return Err(ReadError::OutOfRange {
+                requested_index: idx,
+                max_index: self.num_records(),
+            }
+            .into());
         }
         let rsize = self.config.record_size_bytes();
         let lbound = SIZE_HEADER + (idx * rsize);
@@ -545,7 +549,11 @@ impl MmapReader {
     /// Note: range 10..40 will return all u64s in the mmap between the record index 10 and 40
     pub fn get_buffer_slice(&self, range: Range<usize>) -> Result<&[u64]> {
         if range.end > self.num_records() {
-            return Err(ReadError::OutOfRange(range.end, self.num_records()).into());
+            return Err(ReadError::OutOfRange {
+                requested_index: range.end,
+                max_index: self.num_records(),
+            }
+            .into());
         }
         let rsize = self.config.record_size_bytes();
         let total_records = range.end - range.start;
@@ -883,9 +891,7 @@ impl ParallelReader for MmapReader {
 
         // Validate range
         let num_records = self.num_records();
-        if range.start >= num_records || range.end > num_records || range.start >= range.end {
-            return Ok(()); // Nothing to process or invalid range
-        }
+        self.validate_range(num_records, &range)?;
 
         // Calculate number of records for each thread within the range
         let range_size = range.end - range.start;

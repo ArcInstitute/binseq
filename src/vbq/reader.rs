@@ -1292,9 +1292,7 @@ impl ParallelReader for MmapReader {
 
         // Validate range
         let total_records = index.num_records();
-        if range.start >= total_records || range.end > total_records || range.start >= range.end {
-            return Ok(()); // Nothing to process or invalid range
-        }
+        self.validate_range(total_records, &range)?;
 
         // Find blocks that contain records in the specified range
         let relevant_blocks = index

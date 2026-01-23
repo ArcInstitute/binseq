@@ -134,8 +134,14 @@ pub enum ReadError {
     /// # Arguments
     /// * First `usize` - The requested record index
     /// * Second `usize` - The maximum available record index
-    #[error("Requested record index ({0}) is out of record range ({1})")]
-    OutOfRange(usize, usize),
+    #[error("Requested record index ({requested_index}) is out of record range ({max_index})")]
+    OutOfRange {
+        requested_index: usize,
+        max_index: usize,
+    },
+
+    #[error("Invalid range specified: start ({start}) is greater than end ({end})")]
+    InvalidRange { start: usize, end: usize },
 
     /// End of stream was reached while reading
     #[error("End of stream reached")]
@@ -490,7 +496,10 @@ mod testing {
 
     #[test]
     fn test_read_error_out_of_range() {
-        let error = ReadError::OutOfRange(150, 100);
+        let error = ReadError::OutOfRange {
+            requested_index: 150,
+            max_index: 100,
+        };
         let error_str = format!("{}", error);
         assert!(error_str.contains("150"));
         assert!(error_str.contains("100"));

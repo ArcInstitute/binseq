@@ -239,9 +239,7 @@ impl ParallelReader for MmapReader {
 
         // validate range
         let total_records = self.num_records();
-        if range.start >= total_records || range.end > total_records || range.start > range.end {
-            return Ok(()); // nothing to do
-        }
+        self.validate_range(total_records, &range)?;
 
         let mut iv_start = 0;
         let relevant_blocks = self
@@ -260,12 +258,32 @@ impl ParallelReader for MmapReader {
             return Ok(()); // nothing to do
         }
 
-        let blocks_per_thread = num_blocks.div_ceil(num_threads);
+        // Distribute blocks evenly across threads, giving extra blocks to first threads
+        let base_blocks_per_thread = num_blocks / num_threads;
+        let extra_blocks = num_blocks % num_threads;
 
         let mut handles = Vec::new();
         for thread_id in 0..num_threads {
-            let start_block_idx = thread_id * blocks_per_thread;
-            let end_block_idx = ((thread_id + 1) * blocks_per_thread).min(num_blocks);
+            // Threads 0..extra_blocks get one extra block
+            let blocks_for_this_thread = if thread_id < extra_blocks {
+                base_blocks_per_thread + 1
+            } else {
+                base_blocks_per_thread
+            };
+
+            // Calculate cumulative start position
+            let start_block_idx = if thread_id < extra_blocks {
+                thread_id * (base_blocks_per_thread + 1)
+            } else {
+                extra_blocks * (base_blocks_per_thread + 1)
+                    + (thread_id - extra_blocks) * base_blocks_per_thread
+            };
+            let end_block_idx = start_block_idx + blocks_for_this_thread;
+
+            // Skip threads with no work (happens when num_threads > num_blocks)
+            if blocks_for_this_thread == 0 {
+                continue;
+            }
 
             let mut t_reader = self.clone();
             let mut t_proc = processor.clone();
@@ -575,14 +593,11 @@ mod tests {
             count: count.clone(),
         };
 
-        // Process out of bounds range (should handle gracefully)
+        // Process out of bounds range (should error)
         let result =
             reader.process_parallel_range(processor, 2, num_records + 100..num_records + 200);
 
-        assert!(
-            result.is_ok(),
-            "Should handle out of bounds range gracefully"
-        );
+        assert!(result.is_err(), "Should handle out of bounds as error");
     }
 
     // ==================== Thread Count Tests ====================
