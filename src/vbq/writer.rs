@@ -29,13 +29,13 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+//! use binseq::vbq::{VBinseqWriterBuilder, FileHeaderBuilder};
 //! use binseq::SequencingRecordBuilder;
 //! use std::fs::File;
 //!
 //! // Create a VBINSEQ file writer with headers and compression
 //! let file = File::create("example.vbq").unwrap();
-//! let header = VBinseqHeaderBuilder::new()
+//! let header = FileHeaderBuilder::new()
 //!     .block(128 * 1024)
 //!     .qual(true)
 //!     .compressed(true)
@@ -70,7 +70,7 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use zstd::stream::copy_encode;
 
-use super::header::{BlockHeader, VBinseqHeader};
+use super::header::{BlockHeader, FileHeader};
 use crate::SequencingRecord;
 use crate::error::{Result, WriteError};
 use crate::policy::{Policy, RNG_SEED};
@@ -87,14 +87,14 @@ use crate::vbq::{BlockIndex, BlockRange};
 /// # Examples
 ///
 /// ```rust,no_run
-/// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+/// use binseq::vbq::{VBinseqWriterBuilder, FileHeaderBuilder};
 /// use binseq::Policy;
 /// use std::fs::File;
 ///
 /// // Create a writer with custom settings
 /// let file = File::create("example.vbq").unwrap();
 /// let mut writer = VBinseqWriterBuilder::default()
-///     .header(VBinseqHeaderBuilder::new()
+///     .header(FileHeaderBuilder::new()
 ///         .block(65536)
 ///         .qual(true)
 ///         .compressed(true)
@@ -108,7 +108,7 @@ use crate::vbq::{BlockIndex, BlockRange};
 #[derive(Default)]
 pub struct VBinseqWriterBuilder {
     /// Header of the file
-    header: Option<VBinseqHeader>,
+    header: Option<FileHeader>,
     /// Optional policy for encoding
     policy: Option<Policy>,
     /// Optional headless mode (used in parallel writing)
@@ -122,7 +122,7 @@ impl VBinseqWriterBuilder {
     ///
     /// # Parameters
     ///
-    /// * `header` - The `VBinseqHeader` to use for the file
+    /// * `header` - The `FileHeader` to use for the file
     ///
     /// # Returns
     ///
@@ -131,10 +131,10 @@ impl VBinseqWriterBuilder {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+    /// use binseq::vbq::{VBinseqWriterBuilder, FileHeaderBuilder};
     ///
     /// // Create a header with 64KB blocks and quality scores
-    /// let header = VBinseqHeaderBuilder::new()
+    /// let header = FileHeaderBuilder::new()
     ///     .block(65536)
     ///     .qual(true)
     ///     .paired(true)
@@ -144,7 +144,7 @@ impl VBinseqWriterBuilder {
     /// let builder = VBinseqWriterBuilder::default().header(header);
     /// ```
     #[must_use]
-    pub fn header(mut self, header: VBinseqHeader) -> Self {
+    pub fn header(mut self, header: FileHeader) -> Self {
         self.header = Some(header);
         self
     }
@@ -269,14 +269,14 @@ impl VBinseqWriterBuilder {
 /// instance with the appropriate settings.
 ///
 /// ```rust,no_run
-/// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+/// use binseq::vbq::{VBinseqWriterBuilder, FileHeader};
 /// use binseq::SequencingRecordBuilder;
 /// use std::fs::File;
 ///
 /// // Create a writer for single-end reads
 /// let file = File::create("example.vbq").unwrap();
 /// let mut writer = VBinseqWriterBuilder::default()
-///     .header(VBinseqHeader::default())
+///     .header(FileHeader::default())
 ///     .build(file)
 ///     .unwrap();
 ///
@@ -295,7 +295,7 @@ pub struct VBinseqWriter<W: Write> {
     inner: W,
 
     /// Header of the file
-    header: VBinseqHeader,
+    header: FileHeader,
 
     /// Encoder for nucleotide sequences
     encoder: Encoder,
@@ -316,7 +316,7 @@ pub struct VBinseqWriter<W: Write> {
     index_written: bool,
 }
 impl<W: Write> VBinseqWriter<W> {
-    pub fn new(inner: W, header: VBinseqHeader, policy: Policy, headless: bool) -> Result<Self> {
+    pub fn new(inner: W, header: FileHeader, policy: Policy, headless: bool) -> Result<Self> {
         let mut wtr = Self {
             inner,
             header,
@@ -342,7 +342,7 @@ impl<W: Write> VBinseqWriter<W> {
     /// Initializes the writer by writing the file header
     ///
     /// This method is called automatically during creation unless headless mode is enabled.
-    /// It writes the `VBinseqHeader` to the underlying writer.
+    /// It writes the `FileHeader` to the underlying writer.
     ///
     /// # Returns
     ///
@@ -367,11 +367,11 @@ impl<W: Write> VBinseqWriter<W> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::vbq::{VBinseqWriterBuilder, FileHeader};
     /// use std::fs::File;
     ///
     /// // Create a header for paired-end reads
-    /// let mut header = VBinseqHeader::default();
+    /// let mut header = FileHeader::default();
     /// header.paired = true;
     ///
     /// let file = File::create("paired_reads.vbq").unwrap();
@@ -387,7 +387,7 @@ impl<W: Write> VBinseqWriter<W> {
     }
 
     /// Returns the header of the writer
-    pub fn header(&self) -> VBinseqHeader {
+    pub fn header(&self) -> FileHeader {
         self.header
     }
 
@@ -410,11 +410,11 @@ impl<W: Write> VBinseqWriter<W> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::vbq::{VBinseqWriterBuilder, FileHeader};
     /// use std::fs::File;
     ///
     /// // Create a header for sequences with quality scores
-    /// let mut header = VBinseqHeader::default();
+    /// let mut header = FileHeader::default();
     /// header.qual = true;
     ///
     /// let file = File::create("reads_with_quality.vbq").unwrap();
@@ -487,11 +487,11 @@ impl<W: Write> VBinseqWriter<W> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeaderBuilder};
+    /// use binseq::vbq::{VBinseqWriterBuilder, FileHeaderBuilder};
     /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
-    /// let header = VBinseqHeaderBuilder::new()
+    /// let header = FileHeaderBuilder::new()
     ///     .qual(true)
     ///     .headers(true)
     ///     .build();
@@ -608,7 +608,7 @@ impl<W: Write> VBinseqWriter<W> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::vbq::{VBinseqWriterBuilder, FileHeader};
     /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
@@ -682,7 +682,7 @@ impl<W: Write> VBinseqWriter<W> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use binseq::vbq::{VBinseqWriterBuilder, VBinseqHeader};
+    /// use binseq::vbq::{VBinseqWriterBuilder, FileHeader};
     /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
@@ -1205,7 +1205,7 @@ impl Encoder {
 mod tests {
     use super::*;
     use crate::SequencingRecordBuilder;
-    use crate::vbq::{VBinseqHeaderBuilder, header::SIZE_HEADER};
+    use crate::vbq::{FileHeaderBuilder, header::SIZE_HEADER};
 
     #[test]
     fn test_headless_writer() -> super::Result<()> {
@@ -1225,7 +1225,7 @@ mod tests {
     #[test]
     fn test_ingest_empty_writer() -> super::Result<()> {
         // Test ingesting from an empty writer
-        let header = VBinseqHeaderBuilder::new().build();
+        let header = FileHeaderBuilder::new().build();
 
         // Create a source writer that's empty
         let mut source = VBinseqWriterBuilder::default()
@@ -1255,7 +1255,7 @@ mod tests {
     #[test]
     fn test_ingest_single_record() -> super::Result<()> {
         // Test ingesting a single record
-        let header = VBinseqHeaderBuilder::new().build();
+        let header = FileHeaderBuilder::new().build();
 
         // Create a source writer with a single record
         let mut source = VBinseqWriterBuilder::default()
@@ -1304,7 +1304,7 @@ mod tests {
     #[test]
     fn test_ingest_multi_record() -> super::Result<()> {
         // Test ingesting a single record
-        let header = VBinseqHeaderBuilder::new().build();
+        let header = FileHeaderBuilder::new().build();
 
         // Create a source writer with a single record
         let mut source = VBinseqWriterBuilder::default()
@@ -1354,7 +1354,7 @@ mod tests {
     #[test]
     fn test_ingest_block_boundary() -> super::Result<()> {
         // Test ingesting a single record
-        let header = VBinseqHeaderBuilder::new().build();
+        let header = FileHeaderBuilder::new().build();
 
         // Create a source writer with a single record
         let mut source = VBinseqWriterBuilder::default()
@@ -1405,8 +1405,8 @@ mod tests {
     #[test]
     fn test_ingest_with_quality_scores() -> super::Result<()> {
         // Test ingesting records with quality scores
-        let source_header = VBinseqHeaderBuilder::new().qual(true).build();
-        let dest_header = VBinseqHeaderBuilder::new().qual(true).build();
+        let source_header = FileHeaderBuilder::new().qual(true).build();
+        let dest_header = FileHeaderBuilder::new().qual(true).build();
 
         // Create a source writer with quality scores
         let mut source = VBinseqWriterBuilder::default()
@@ -1449,7 +1449,7 @@ mod tests {
     #[test]
     fn test_ingest_with_compression() -> super::Result<()> {
         // Test ingesting a single record
-        let header = VBinseqHeaderBuilder::new().compressed(true).build();
+        let header = FileHeaderBuilder::new().compressed(true).build();
 
         // Create a source writer with a single record
         let mut source = VBinseqWriterBuilder::default()
@@ -1496,8 +1496,8 @@ mod tests {
 
     #[test]
     fn test_ingest_incompatible_headers() -> super::Result<()> {
-        let source_header = VBinseqHeaderBuilder::new().build();
-        let dest_header = VBinseqHeaderBuilder::new().qual(true).build();
+        let source_header = FileHeaderBuilder::new().build();
+        let dest_header = FileHeaderBuilder::new().qual(true).build();
 
         // Create a source writer with quality scores
         let mut source = VBinseqWriterBuilder::default()

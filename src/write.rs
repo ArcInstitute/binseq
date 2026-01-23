@@ -262,7 +262,7 @@ impl BinseqWriterBuilder {
 
     /// Sets the corresponding values for this builder given an existing VBQ header
     #[must_use]
-    pub fn from_vbq_header(header: vbq::VBinseqHeader) -> Self {
+    pub fn from_vbq_header(header: vbq::FileHeader) -> Self {
         Self {
             format: Format::Vbq,
             slen: None,
@@ -397,7 +397,7 @@ impl BinseqWriterBuilder {
     }
 
     fn build_vbq<W: Write>(self, writer: W) -> Result<BinseqWriter<W>> {
-        let mut header_builder = vbq::VBinseqHeaderBuilder::new()
+        let mut header_builder = vbq::FileHeaderBuilder::new()
             .paired(self.paired)
             .qual(self.quality)
             .headers(self.headers)

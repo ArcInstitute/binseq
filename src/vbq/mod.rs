@@ -150,7 +150,7 @@ mod index;
 mod reader;
 mod writer;
 
-pub use header::{BlockHeader, VBinseqHeader, VBinseqHeaderBuilder};
+pub use header::{BlockHeader, FileHeader, FileHeaderBuilder};
 pub use index::{BlockIndex, BlockRange};
 pub use reader::{MmapReader, RecordBlock, RecordBlockIter, RefRecord};
 pub use writer::{VBinseqWriter, VBinseqWriterBuilder};

@@ -60,7 +60,7 @@ use memmap2::Mmap;
 use zstd::zstd_safe;
 
 use super::{
-    BlockHeader, BlockIndex, BlockRange, VBinseqHeader,
+    BlockHeader, BlockIndex, BlockRange, FileHeader,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
 use crate::DEFAULT_QUALITY_SCORE;
@@ -799,7 +799,7 @@ pub struct MmapReader {
     mmap: Arc<Mmap>,
 
     /// Parsed header information from the file
-    header: VBinseqHeader,
+    header: FileHeader,
 
     /// Current cursor position in the file (in bytes)
     pos: usize,
@@ -861,7 +861,7 @@ impl MmapReader {
         let header = {
             let mut header_bytes = [0u8; SIZE_HEADER];
             header_bytes.copy_from_slice(&mmap[..SIZE_HEADER]);
-            VBinseqHeader::from_bytes(&header_bytes)?
+            FileHeader::from_bytes(&header_bytes)?
         };
 
         Ok(Self {
@@ -959,9 +959,9 @@ impl MmapReader {
     ///
     /// # Returns
     ///
-    /// A copy of the file's `VBinseqHeader`
+    /// A copy of the file's `FileHeader`
     #[must_use]
-    pub fn header(&self) -> VBinseqHeader {
+    pub fn header(&self) -> FileHeader {
         self.header
     }
 

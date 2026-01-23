@@ -4,7 +4,7 @@
 //!
 //! The VBINSEQ format consists of two primary header types:
 //!
-//! 1. `VBinseqHeader` - The file header that appears at the beginning of a VBINSEQ file,
+//! 1. `FileHeader` - The file header that appears at the beginning of a VBINSEQ file,
 //!    containing information about the overall file format and configuration.
 //!
 //! 2. `BlockHeader` - Headers that appear before each block of records, containing
@@ -63,7 +63,7 @@ pub const RESERVED_BYTES: [u8; 13] = [42; 13];
 pub const RESERVED_BYTES_BLOCK: [u8; 12] = [42; 12];
 
 #[derive(Default, Debug, Clone, Copy)]
-pub struct VBinseqHeaderBuilder {
+pub struct FileHeaderBuilder {
     qual: Option<bool>,
     block: Option<u64>,
     compressed: Option<bool>,
@@ -72,7 +72,7 @@ pub struct VBinseqHeaderBuilder {
     headers: Option<bool>,
     flags: Option<bool>,
 }
-impl VBinseqHeaderBuilder {
+impl FileHeaderBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -113,8 +113,8 @@ impl VBinseqHeaderBuilder {
         self
     }
     #[must_use]
-    pub fn build(self) -> VBinseqHeader {
-        VBinseqHeader::with_capacity(
+    pub fn build(self) -> FileHeader {
+        FileHeader::with_capacity(
             self.block.unwrap_or(BLOCK_SIZE),
             self.qual.unwrap_or(false),
             self.compressed.unwrap_or(false),
@@ -143,7 +143,7 @@ impl VBinseqHeaderBuilder {
 /// * `paired` - Whether records contain paired sequences (1 byte boolean)
 /// * `reserved` - Reserved bytes for future extensions (16 bytes)
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VBinseqHeader {
+pub struct FileHeader {
     /// Magic number to identify the file format ("VSEQ")
     ///
     /// Always set to 0x51455356 (4 bytes)
@@ -198,7 +198,7 @@ pub struct VBinseqHeader {
     /// Currently filled with placeholder values (13 bytes)
     pub reserved: [u8; 13],
 }
-impl Default for VBinseqHeader {
+impl Default for FileHeader {
     /// Creates a default header with default block size and all features disabled
     ///
     /// The default header:
@@ -220,7 +220,7 @@ impl Default for VBinseqHeader {
         )
     }
 }
-impl VBinseqHeader {
+impl FileHeader {
     /// Creates a new VBINSEQ header with the default block size
     ///
     /// # Parameters
@@ -234,10 +234,10 @@ impl VBinseqHeader {
     /// # Example
     ///
     /// ```rust
-    /// use binseq::vbq::VBinseqHeaderBuilder;
+    /// use binseq::vbq::FileHeaderBuilder;
     ///
     /// // Create header with quality scores and compression, without paired sequences
-    /// let header = VBinseqHeaderBuilder::new()
+    /// let header = FileHeaderBuilder::new()
     ///     .qual(true)
     ///     .compressed(true)
     ///     .build();
@@ -268,10 +268,10 @@ impl VBinseqHeader {
     /// # Example
     ///
     /// ```rust
-    /// use binseq::vbq::VBinseqHeaderBuilder;
+    /// use binseq::vbq::FileHeaderBuilder;
     ///
     /// // Create header with a 256KB block size, with quality scores and compression
-    /// let header = VBinseqHeaderBuilder::new()
+    /// let header = FileHeaderBuilder::new()
     ///     .block(256 * 1024)
     ///     .qual(true)
     ///     .compressed(true)
@@ -308,7 +308,7 @@ impl VBinseqHeader {
 
     /// Creates a header from a 32-byte buffer
     ///
-    /// This function parses a raw byte buffer into a `VBinseqHeader` structure,
+    /// This function parses a raw byte buffer into a `FileHeader` structure,
     /// validating the magic number and format version.
     ///
     /// # Parameters
@@ -399,7 +399,7 @@ impl VBinseqHeader {
     /// Reads a header from a reader
     ///
     /// This function reads 32 bytes from the provided reader and parses them into
-    /// a `VBinseqHeader` structure.
+    /// a `FileHeader` structure.
     ///
     /// # Parameters
     ///

@@ -43,7 +43,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use zstd::{Decoder, Encoder};
 
 use super::{
-    BlockHeader, VBinseqHeader,
+    BlockHeader, FileHeader,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
 use crate::error::{IndexError, Result};
@@ -572,7 +572,7 @@ impl BlockIndex {
         let _header = {
             let mut header_bytes = [0u8; SIZE_HEADER];
             header_bytes.copy_from_slice(&mmap[..SIZE_HEADER]);
-            VBinseqHeader::from_bytes(&header_bytes)?
+            FileHeader::from_bytes(&header_bytes)?
         };
 
         // Initialize position after the header

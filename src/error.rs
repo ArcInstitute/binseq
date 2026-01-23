@@ -265,7 +265,7 @@ pub enum WriteError {
     ///
     /// The first parameter is the expected header, the second is the found header
     #[error("Incompatible headers found in VBinseqWriter::ingest. Found ({1:?}) Expected ({0:?})")]
-    IncompatibleHeaders(crate::vbq::VBinseqHeader, crate::vbq::VBinseqHeader),
+    IncompatibleHeaders(crate::vbq::FileHeader, crate::vbq::FileHeader),
 
     /// When building a `SequencingRecord` without a primary sequence
     #[error("SequencingRecordBuilder requires a primary sequence (s_seq)")]
