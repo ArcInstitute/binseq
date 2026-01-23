@@ -1,11 +1,11 @@
 use std::io::{BufReader, Cursor};
 
-use binseq::bq::{BinseqHeaderBuilder, StreamReader, StreamWriterBuilder};
+use binseq::bq::{FileHeaderBuilder, StreamReader, StreamWriterBuilder};
 use binseq::{BinseqRecord, Policy, Result};
 
 fn main() -> Result<()> {
     // Create a header for sequences of length 100
-    let header = BinseqHeaderBuilder::new().slen(100).build()?;
+    let header = FileHeaderBuilder::new().slen(100).build()?;
 
     // Create some example sequence data
     let sequence = b"ACGT".repeat(25); // 100 nucleotides
