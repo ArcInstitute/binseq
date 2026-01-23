@@ -414,7 +414,7 @@ impl BinseqWriterBuilder {
 
         let header = header_builder.build();
 
-        let inner = vbq::VBinseqWriterBuilder::default()
+        let inner = vbq::WriterBuilder::default()
             .header(header)
             .policy(self.policy.unwrap_or_default())
             .headless(self.headless)
@@ -451,7 +451,7 @@ pub enum BinseqWriter<W: Write> {
     /// BQ format writer
     Bq(bq::Writer<W>),
     /// VBQ format writer
-    Vbq(vbq::VBinseqWriter<W>),
+    Vbq(vbq::Writer<W>),
     /// CBQ format writer
     Cbq(cbq::ColumnarBlockWriter<W>),
 }
@@ -588,7 +588,7 @@ impl<W: Write> BinseqWriter<W> {
                 Ok(BinseqWriter::Bq(inner))
             }
             Self::Vbq(w) => {
-                let inner = vbq::VBinseqWriterBuilder::default()
+                let inner = vbq::WriterBuilder::default()
                     .header(w.header())
                     .policy(w.policy())
                     .headless(true)

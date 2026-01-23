@@ -91,7 +91,7 @@
 //! ```
 //! use std::fs::File;
 //! use std::io::BufWriter;
-//! use binseq::vbq::{VBinseqHeaderBuilder, VBinseqWriterBuilder, MmapReader};
+//! use binseq::vbq::{FileHeaderBuilder, WriterBuilder, MmapReader};
 //! use binseq::{BinseqRecord, SequencingRecordBuilder};
 //!
 //! /*
@@ -99,7 +99,7 @@
 //! */
 //!
 //! // Create a header for sequences with quality scores and headers
-//! let header = VBinseqHeaderBuilder::new()
+//! let header = FileHeaderBuilder::new()
 //!     .qual(true)
 //!     .compressed(true)
 //!     .headers(true)
@@ -107,7 +107,7 @@
 //!
 //! // Create a writer
 //! let file = File::create("example.vbq").unwrap();
-//! let mut writer = VBinseqWriterBuilder::default()
+//! let mut writer = WriterBuilder::default()
 //!     .header(header)
 //!     .build(BufWriter::new(file))
 //!     .unwrap();
@@ -153,4 +153,4 @@ mod writer;
 pub use header::{BlockHeader, FileHeader, FileHeaderBuilder};
 pub use index::{BlockIndex, BlockRange};
 pub use reader::{MmapReader, RecordBlock, RecordBlockIter, RefRecord};
-pub use writer::{VBinseqWriter, VBinseqWriterBuilder};
+pub use writer::{Writer, WriterBuilder};
