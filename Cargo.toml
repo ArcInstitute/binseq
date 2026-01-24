@@ -1,6 +1,6 @@
 [package]
 name = "binseq"
-version = "0.8.3"
+version = "0.9.0"
 edition = "2024"
 description = "A high efficiency binary format for sequencing data"
 license = "MIT"
@@ -8,7 +8,7 @@ authors = ["Noam Teyssier <noam.teyssier@arcinstitute.org>"]
 repository = "https://github.com/arcinstitute/binseq"
 documentation = "https://docs.rs/binseq"
 categories = ["science::bioinformatics", "encoding", "data-structures"]
-keywords = ["bioinformatics", "nucleotide", "sequencing", "genomics", "fastq"]
+keywords = ["binary", "nucleotide", "sequencing", "genomics", "fastq"]
 
 [dependencies]
 anyhow = {version = "1.0.100", optional = true}
