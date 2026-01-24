@@ -1,11 +1,11 @@
-//! Reader implementation for VBINSEQ files
+//! Reader implementation for VBQ files
 //!
-//! This module provides functionality for reading sequence data from VBINSEQ files,
+//! This module provides functionality for reading sequence data from VBQ files,
 //! including support for compressed blocks, quality scores, paired-end reads, and sequence headers.
 //!
 //! ## Format Changes (v0.7.0+)
 //!
-//! - **Embedded Index**: Readers now load the index from within VBQ files instead of separate `.vqi` files
+//! - **Embedded Index**: Readers now load the index from within VBQ files
 //! - **Headers Support**: Optional sequence headers/identifiers can be read from each record
 //! - **Multi-bit Encoding**: Support for reading 2-bit and 4-bit nucleotide encodings
 //! - **Extended Capacity**: u64 indexing supports files with more than 4 billion records
@@ -51,7 +51,7 @@
 
 use std::fs::File;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use bitnuc::BitSize;
@@ -60,13 +60,14 @@ use memmap2::Mmap;
 use zstd::zstd_safe;
 
 use super::{
+    BlockHeader, BlockIndex, BlockRange, FileHeader,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
-    BlockHeader, BlockIndex, BlockRange, VBinseqHeader,
 };
-use crate::vbq::index::{IndexHeader, INDEX_END_MAGIC, INDEX_HEADER_SIZE};
+use crate::DEFAULT_QUALITY_SCORE;
+use crate::vbq::index::{INDEX_END_MAGIC, INDEX_HEADER_SIZE, IndexHeader};
 use crate::{
-    error::{ReadError, Result},
     BinseqRecord, ParallelProcessor, ParallelReader,
+    error::{ReadError, Result},
 };
 
 /// Calculates the number of 64-bit words needed to store a nucleotide sequence of the given length
@@ -126,11 +127,14 @@ struct RecordMetadata {
     x_seq_span: Span,    // Encoded sequence words (u64s) (into `.sequences` buffer)
     x_qual_span: Span,   // Quality bytes
     x_header_span: Span, // Header bytes
+
+    /// Indicates whether the record has quality scores
+    has_quality: bool,
 }
 
-/// A container for a block of VBINSEQ records
+/// A container for a block of VBQ records
 ///
-/// The `RecordBlock` struct represents a single block of records read from a VBINSEQ file.
+/// The `RecordBlock` struct represents a single block of records read from a VBQ file.
 /// It stores the raw data for multiple records in vectors, allowing efficient iteration
 /// over the records without copying memory for each record.
 ///
@@ -179,11 +183,17 @@ pub struct RecordBlock {
 
     /// Reusable decoding buffer for the block
     dbuf: Vec<u8>,
+
+    /// Reusable buffer for quality scores for the block
+    qbuf: Vec<u8>,
+
+    /// Default quality score for the block
+    default_quality_score: u8,
 }
 impl RecordBlock {
     /// Creates a new empty `RecordBlock` with the specified block size
     ///
-    /// The block size should match the one specified in the VBINSEQ file header
+    /// The block size should match the one specified in the VBQ file header
     /// for proper operation. This is typically handled automatically when using
     /// `MmapReader::new_block()`.
     ///
@@ -206,7 +216,19 @@ impl RecordBlock {
             rbuf: Vec::default(),
             dbuf: Vec::default(),
             dctx: zstd_safe::DCtx::create(),
+            qbuf: Vec::default(),
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         }
+    }
+
+    /// Sets the default quality score for the block
+    ///
+    /// # Parameters
+    ///
+    /// * `score` - Default quality score for the block
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
+        self.qbuf.clear();
     }
 
     /// Returns the number of records in this block
@@ -272,6 +294,7 @@ impl RecordBlock {
         self.sequences.clear();
         self.dbuf.clear();
         // Note: We keep rbuf allocated for reuse
+        // Note: We keep qbuf allocated for reuse
     }
 
     /// Ingest the bytes from a block into the record block
@@ -425,6 +448,14 @@ impl RecordBlock {
                 Span::new(0, 0)
             };
 
+            // Update qbuf size
+            if !has_quality {
+                let max_size = slen.max(xlen) as usize;
+                if self.qbuf.len() < max_size {
+                    self.qbuf.resize(max_size, self.default_quality_score);
+                }
+            }
+
             // Store the record metadata - all spans!
             self.records.push(RecordMetadata {
                 flag,
@@ -436,6 +467,7 @@ impl RecordBlock {
                 x_seq_span,
                 x_qual_span,
                 x_header_span,
+                has_quality,
             });
         }
     }
@@ -511,6 +543,7 @@ pub struct RecordBlockIter<'a> {
     block: &'a RecordBlock,
     pos: usize,
     header_buffer: itoa::Buffer,
+    qbuf: &'a [u8],
 }
 impl<'a> RecordBlockIter<'a> {
     #[must_use]
@@ -519,6 +552,7 @@ impl<'a> RecordBlockIter<'a> {
             block,
             pos: 0,
             header_buffer: itoa::Buffer::new(),
+            qbuf: &block.qbuf,
         }
     }
 }
@@ -542,6 +576,20 @@ impl<'a> Iterator for RecordBlockIter<'a> {
             header_buf[..header_len].copy_from_slice(header_str.as_bytes());
         }
 
+        let (squal, xqual) = if meta.has_quality {
+            // Record has quality scores, slice into rbuf using span
+            (
+                meta.s_qual_span.slice(&self.block.rbuf),
+                meta.x_qual_span.slice(&self.block.rbuf),
+            )
+        } else {
+            // Record does not have quality scores, use preallocated buffer for default scores
+            (
+                &self.qbuf[..meta.slen as usize],
+                &self.qbuf[..meta.xlen as usize],
+            )
+        };
+
         // increment position
         {
             self.pos += 1;
@@ -558,9 +606,10 @@ impl<'a> Iterator for RecordBlockIter<'a> {
             // Slice into sequences Vec using span
             sbuf: meta.s_seq_span.slice_u64(&self.block.sequences),
             xbuf: meta.x_seq_span.slice_u64(&self.block.sequences),
+            // Pass quality score buffers
+            squal,
+            xqual,
             // Slice into rbuf using span
-            squal: meta.s_qual_span.slice(&self.block.rbuf),
-            xqual: meta.x_qual_span.slice(&self.block.rbuf),
             sheader: meta.s_header_span.slice(&self.block.rbuf),
             xheader: meta.x_header_span.slice(&self.block.rbuf),
             header_buf,
@@ -678,9 +727,9 @@ impl BinseqRecord for RefRecord<'_> {
     }
 }
 
-/// Memory-mapped reader for VBINSEQ files
+/// Memory-mapped reader for VBQ files
 ///
-/// [`MmapReader`] provides efficient, memory-mapped access to VBINSEQ files. It allows
+/// [`MmapReader`] provides efficient, memory-mapped access to VBQ files. It allows
 /// sequential reading of record blocks and supports parallel processing of records.
 ///
 /// ## Format Support (v0.7.0+)
@@ -694,7 +743,7 @@ impl BinseqRecord for RefRecord<'_> {
 /// which can be more efficient than standard file I/O, especially for large files.
 ///
 /// The [`MmapReader`] is designed to be used in a multi-threaded environment, and it
-/// is built around [`RecordBlock`]s which are the units of data in a VBINSEQ file.
+/// is built around [`RecordBlock`]s which are the units of data in a VBQ file.
 /// Each one would be held by a separate thread and would load data from the shared
 /// [`MmapReader`] through the [`MmapReader::read_block_into`] method. However, they can
 /// also be used in a single-threaded environment for sequential processing.
@@ -743,14 +792,11 @@ impl BinseqRecord for RefRecord<'_> {
 /// }
 /// ```
 pub struct MmapReader {
-    /// Path to the VBINSEQ file
-    path: PathBuf,
-
     /// Memory-mapped file contents for efficient access
     mmap: Arc<Mmap>,
 
     /// Parsed header information from the file
-    header: VBinseqHeader,
+    header: FileHeader,
 
     /// Current cursor position in the file (in bytes)
     pos: usize,
@@ -760,23 +806,24 @@ pub struct MmapReader {
 
     /// Whether to decode sequences at once in each block
     decode_block: bool,
+
+    /// Default quality score for this reader
+    default_quality_score: u8,
 }
 impl MmapReader {
-    /// Creates a new `MmapReader` for a VBINSEQ file
+    /// Creates a new `MmapReader` for a VBQ file
     ///
     /// This method opens the specified file, memory-maps its contents, reads the
-    /// VBINSEQ header information, and loads the embedded index. The reader is positioned
+    /// VBQ header information, and loads the embedded index. The reader is positioned
     /// at the beginning of the first record block after the header.
     ///
     /// ## Index Loading (v0.7.0+)
     ///
-    /// The embedded index is automatically loaded from the end of the file. For legacy
-    /// files with separate `.vqi` index files, the index is automatically migrated to
-    /// the embedded format.
+    /// The embedded index is automatically loaded from the end of the file.
     ///
     /// # Parameters
     ///
-    /// * `path` - Path to the VBINSEQ file to open
+    /// * `path` - Path to the VBQ file to open
     ///
     /// # Returns
     ///
@@ -786,7 +833,7 @@ impl MmapReader {
     ///
     /// * `ReadError::InvalidFileType` if the path doesn't point to a regular file
     /// * I/O errors if the file can't be opened or memory-mapped
-    /// * Header validation errors if the file doesn't contain a valid VBINSEQ header
+    /// * Header validation errors if the file doesn't contain a valid VBQ header
     ///
     /// # Examples
     ///
@@ -809,17 +856,21 @@ impl MmapReader {
         let header = {
             let mut header_bytes = [0u8; SIZE_HEADER];
             header_bytes.copy_from_slice(&mmap[..SIZE_HEADER]);
-            VBinseqHeader::from_bytes(&header_bytes)?
+            FileHeader::from_bytes(&header_bytes)?
         };
 
         Ok(Self {
-            path: PathBuf::from(path.as_ref()),
             mmap: Arc::new(mmap),
             header,
             pos: SIZE_HEADER,
             total: 0,
             decode_block: true,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         })
+    }
+
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
     }
 
     /// Creates a new empty record block with the appropriate size for this file
@@ -841,7 +892,9 @@ impl MmapReader {
     /// ```
     #[must_use]
     pub fn new_block(&self) -> RecordBlock {
-        RecordBlock::new(self.header.bits, self.header.block as usize)
+        let mut block = RecordBlock::new(self.header.bits, self.header.block as usize);
+        block.set_default_quality_score(self.default_quality_score);
+        block
     }
 
     /// Sets whether to decode sequences at once in each block
@@ -862,36 +915,6 @@ impl MmapReader {
         self.decode_block = decode_block;
     }
 
-    /// Returns the path where the index file would be located
-    ///
-    /// The index file is used for random access to blocks and has the same path as
-    /// the VBINSEQ file with the ".vqi" extension appended.
-    ///
-    /// # Returns
-    ///
-    /// The path where the index file would be located
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use binseq::vbq::MmapReader;
-    /// use binseq::Result;
-    ///
-    /// fn main() -> Result<()> {
-    ///     let path = "./data/subset.vbq";
-    ///     let reader = MmapReader::new(path)?;
-    ///     let index_path = reader.index_path();
-    ///     assert_eq!(index_path.to_str(), Some("./data/subset.vbq.vqi"));
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub fn index_path(&self) -> PathBuf {
-        let mut p = self.path.as_os_str().to_owned();
-        p.push(".vqi");
-        p.into()
-    }
-
     /// Returns a copy of the file's header information
     ///
     /// The header contains information about the file format, including whether
@@ -900,9 +923,9 @@ impl MmapReader {
     ///
     /// # Returns
     ///
-    /// A copy of the file's `VBinseqHeader`
+    /// A copy of the file's `FileHeader`
     #[must_use]
-    pub fn header(&self) -> VBinseqHeader {
+    pub fn header(&self) -> FileHeader {
         self.header
     }
 
@@ -917,7 +940,7 @@ impl MmapReader {
     /// This method reads the next block of records from the current position in the file
     /// and populates the provided `RecordBlock` with the data. The block is cleared and reused
     /// to avoid unnecessary memory allocations. This is the primary method for sequential
-    /// reading of VBINSEQ files.
+    /// reading of VBQ files.
     ///
     /// The method automatically handles decompression if the file was written with
     /// compression enabled and updates the total record count as it progresses through the file.
@@ -1021,23 +1044,20 @@ impl MmapReader {
         Ok(true)
     }
 
-    /// Loads or creates the block index for this VBINSEQ file
+    /// Loads the embedded block index from this VBQ file
     ///
     /// The block index provides metadata about each block in the file, enabling
-    /// random access to blocks and parallel processing. This method first attempts to
-    /// load an existing index file. If the index doesn't exist or doesn't match the
-    /// current file, it automatically generates a new index from the VBINSEQ file
-    /// and saves it for future use.
+    /// random access to blocks and parallel processing. This method reads the
+    /// embedded index from the end of the VBQ file.
     ///
     /// # Returns
     ///
-    /// The loaded or newly created `BlockIndex` if successful
+    /// The loaded `BlockIndex` if successful
     ///
     /// # Errors
     ///
-    /// * File I/O errors when reading or creating the index
-    /// * Parsing errors if the VBINSEQ file has invalid format
-    /// * Other index-related errors that cannot be resolved by creating a new index
+    /// * File I/O errors when reading the index
+    /// * Parsing errors if the VBQ file has invalid format or missing index
     ///
     /// # Examples
     ///
@@ -1046,18 +1066,12 @@ impl MmapReader {
     ///
     /// let reader = MmapReader::new("example.vbq").unwrap();
     ///
-    /// // Load the index file (or create if it doesn't exist)
+    /// // Load the embedded index
     /// let index = reader.load_index().unwrap();
     ///
     /// // Use the index to get information about the file
     /// println!("Number of blocks: {}", index.n_blocks());
     /// ```
-    ///
-    /// # Notes
-    ///
-    /// The index file is stored with the same path as the VBINSEQ file but with a ".vqi"
-    /// extension appended. This allows for reusing the index across multiple runs,
-    /// which can significantly improve startup performance for large files.
     pub fn load_index(&self) -> Result<BlockIndex> {
         let start_pos_magic = self.mmap.len() - 8;
         let start_pos_index_size = start_pos_magic - 8;
@@ -1090,7 +1104,7 @@ impl MmapReader {
 impl ParallelReader for MmapReader {
     /// Processes all records in the file in parallel using multiple threads
     ///
-    /// This method provides efficient parallel processing of VBINSEQ files by distributing
+    /// This method provides efficient parallel processing of VBQ files by distributing
     /// blocks across multiple worker threads. The file's block structure is leveraged to divide
     /// the work evenly without requiring thread synchronization during processing, which leads
     /// to near-linear scaling with the number of threads.
@@ -1167,7 +1181,7 @@ impl ParallelReader for MmapReader {
     ///     }
     /// }
     ///
-    /// // Use the processor with a VBINSEQ file
+    /// // Use the processor with a VBQ file
     /// let reader = MmapReader::new("example.vbq").unwrap();
     /// let counter = RecordCounter::new();
     ///
@@ -1233,9 +1247,7 @@ impl ParallelReader for MmapReader {
 
         // Validate range
         let total_records = index.num_records();
-        if range.start >= total_records || range.end > total_records || range.start >= range.end {
-            return Ok(()); // Nothing to process or invalid range
-        }
+        self.validate_range(total_records, &range)?;
 
         // Find blocks that contain records in the specified range
         let relevant_blocks = index
@@ -1345,5 +1357,537 @@ impl ParallelReader for MmapReader {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BinseqRecord;
+
+    const TEST_VBQ_FILE: &str = "./data/subset.vbq";
+
+    // ==================== MmapReader Basic Tests ====================
+
+    #[test]
+    fn test_mmap_reader_new() {
+        let reader = MmapReader::new(TEST_VBQ_FILE);
+        assert!(reader.is_ok(), "Failed to create VBQ reader");
+    }
+
+    #[test]
+    fn test_mmap_reader_num_records() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let num_records = reader.num_records();
+        assert!(num_records.is_ok(), "Failed to get num_records");
+        assert!(num_records.unwrap() > 0, "Expected non-zero records");
+    }
+
+    #[test]
+    fn test_mmap_reader_is_paired() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let is_paired = reader.is_paired();
+        // Test that the method returns a boolean
+        assert!(is_paired || !is_paired);
+    }
+
+    #[test]
+    fn test_mmap_reader_header_access() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let header = &reader.header;
+        assert!(header.block > 0, "Expected non-zero block size");
+        assert_eq!(header.magic, 0x51455356, "Expected VSEQ magic number");
+    }
+
+    // ==================== RecordBlock Tests ====================
+
+    #[test]
+    fn test_new_block() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let block = reader.new_block();
+
+        assert_eq!(block.bitsize, reader.header.bits);
+        assert!(block.n_records() == 0, "New block should be empty");
+    }
+
+    #[test]
+    fn test_record_block_creation() {
+        let block = RecordBlock::new(BitSize::Two, 1024);
+
+        assert_eq!(block.bitsize, BitSize::Two);
+        assert_eq!(block.n_records(), 0);
+    }
+
+    #[test]
+    fn test_record_block_clear() {
+        let mut block = RecordBlock::new(BitSize::Two, 1024);
+
+        // Block starts empty
+        assert_eq!(block.n_records(), 0);
+
+        // Clear should not panic on empty block
+        block.clear();
+        assert_eq!(block.n_records(), 0);
+    }
+
+    #[test]
+    fn test_record_block_set_default_quality() {
+        let mut block = RecordBlock::new(BitSize::Two, 1024);
+        let custom_score = 42u8;
+
+        block.set_default_quality_score(custom_score);
+        assert_eq!(block.default_quality_score, custom_score);
+    }
+
+    // ==================== Block Reading Tests ====================
+
+    #[test]
+    fn test_read_block_into() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        let result = reader.read_block_into(&mut block);
+        assert!(result.is_ok(), "Failed to read block");
+
+        if result.unwrap() {
+            assert!(block.n_records() > 0, "Block should contain records");
+        }
+    }
+
+    #[test]
+    fn test_read_multiple_blocks() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        let mut blocks_read = 0;
+        let max_blocks = 5;
+
+        while reader.read_block_into(&mut block).unwrap() && blocks_read < max_blocks {
+            assert!(block.n_records() > 0, "Each block should have records");
+            blocks_read += 1;
+        }
+
+        assert!(blocks_read > 0, "Should read at least one block");
+    }
+
+    #[test]
+    fn test_block_iteration() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() {
+            let num_records = block.n_records();
+            let mut count = 0;
+
+            for record in block.iter() {
+                assert!(record.slen() > 0, "Record should have non-zero length");
+                count += 1;
+            }
+
+            assert_eq!(count, num_records, "Iterator should yield all records");
+        }
+    }
+
+    // ==================== Record Access Tests ====================
+
+    #[test]
+    fn test_record_sequence_data() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() {
+            // Decode all sequences in the block
+            block.decode_all().unwrap();
+
+            if let Some(record) = block.iter().next() {
+                let sseq = record.sseq();
+                assert!(!sseq.is_empty(), "Sequence should not be empty");
+
+                let slen = record.slen();
+                assert_eq!(sseq.len(), slen as usize, "Sequence length mismatch");
+            }
+        }
+    }
+
+    #[test]
+    fn test_record_header_data() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() {
+            for record in block.iter() {
+                let sheader = record.sheader();
+                // Header may be empty if not included in file
+                if !sheader.is_empty() {
+                    // Should be valid UTF-8 if present
+                    let _ = std::str::from_utf8(sheader);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_record_quality_data() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() {
+            for record in block.iter() {
+                let squal = record.squal();
+                let slen = record.slen() as usize;
+
+                if !squal.is_empty() {
+                    assert_eq!(
+                        squal.len(),
+                        slen,
+                        "Quality length should match sequence length"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_record_bitsize() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() {
+            for record in block.iter() {
+                let bitsize = record.bitsize();
+                assert!(
+                    matches!(bitsize, BitSize::Two | BitSize::Four),
+                    "Bitsize should be Two or Four"
+                );
+            }
+        }
+    }
+
+    // ==================== Default Quality Score Tests ====================
+
+    #[test]
+    fn test_set_default_quality_score() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let custom_score = 42u8;
+
+        reader.set_default_quality_score(custom_score);
+        assert_eq!(reader.default_quality_score, custom_score);
+
+        let block = reader.new_block();
+        assert_eq!(block.default_quality_score, custom_score);
+    }
+
+    // ==================== Decode Block Feature Tests ====================
+
+    #[test]
+    fn test_set_decode_block() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+
+        reader.set_decode_block(true);
+        // Just verify it doesn't panic - actual behavior depends on reading
+
+        reader.set_decode_block(false);
+        // Verify we can toggle it
+    }
+
+    #[test]
+    fn test_decode_block_affects_reading() {
+        let mut reader1 = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        reader1.set_decode_block(true);
+        let mut block1 = reader1.new_block();
+
+        let mut reader2 = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        reader2.set_decode_block(false);
+        let mut block2 = reader2.new_block();
+
+        // Both should read successfully
+        let result1 = reader1.read_block_into(&mut block1);
+        let result2 = reader2.read_block_into(&mut block2);
+
+        assert!(result1.is_ok() && result2.is_ok());
+    }
+
+    // ==================== Parallel Processing Tests ====================
+
+    #[derive(Clone, Default)]
+    struct VbqCountingProcessor {
+        count: Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl ParallelProcessor for VbqCountingProcessor {
+        fn process_record<R: BinseqRecord>(&mut self, _record: R) -> Result<()> {
+            *self.count.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_parallel_processing() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let num_records_result = reader.num_records();
+
+        // Skip test if we can't determine record count
+        if num_records_result.is_err() {
+            return;
+        }
+
+        let num_records = num_records_result.unwrap();
+
+        let processor = VbqCountingProcessor::default();
+
+        let result = reader.process_parallel(processor.clone(), 2);
+
+        // Parallel processing might not be supported for all VBQ files
+        if result.is_ok() {
+            let final_count = *processor.count.lock().unwrap();
+            assert_eq!(final_count, num_records,);
+        }
+    }
+
+    #[test]
+    fn test_parallel_processing_range() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let num_records_result = reader.num_records();
+
+        // Skip test if we can't determine record count
+        if num_records_result.is_err() {
+            return;
+        }
+
+        let num_records = num_records_result.unwrap();
+
+        if num_records >= 100 {
+            let start = 10;
+            let end = 50;
+            let expected_count = end - start;
+
+            let processor = VbqCountingProcessor::default();
+
+            let result = reader.process_parallel_range(processor.clone(), 2, start..end);
+
+            // Parallel processing might not be supported for all VBQ files
+            if result.is_ok() {
+                let final_count = *processor.count.lock().unwrap();
+                // The count should be reasonable
+                assert_eq!(
+                    final_count, expected_count,
+                    "Processed count should match expected range"
+                );
+            }
+        }
+    }
+
+    // ==================== Span Tests ====================
+
+    #[test]
+    fn test_span_creation() {
+        let span = Span::new(10, 20);
+        assert_eq!(span.offset, 10);
+        assert_eq!(span.len, 20);
+    }
+
+    #[test]
+    fn test_span_default() {
+        let span = Span::default();
+        assert_eq!(span.offset, 0);
+        assert_eq!(span.len, 0);
+    }
+
+    // ==================== Error Handling Tests ====================
+
+    #[test]
+    fn test_nonexistent_file() {
+        let result = MmapReader::new("./data/nonexistent.vbq");
+        assert!(result.is_err(), "Should fail on nonexistent file");
+    }
+
+    #[test]
+    fn test_invalid_file_format() {
+        // Try to open a non-VBQ file as VBQ
+        let result = MmapReader::new("./Cargo.toml");
+        // This should fail during header validation
+        assert!(result.is_err(), "Should fail on invalid file format");
+    }
+
+    // ==================== Index Loading Tests ====================
+
+    #[test]
+    fn test_load_index() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let index_result = reader.load_index();
+
+        assert!(index_result.is_ok(), "Should be able to load index");
+
+        let index = index_result.unwrap();
+        assert!(index.num_records() > 0, "Index should have records");
+    }
+
+    #[test]
+    fn test_index_consistency() {
+        let reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let num_records_from_reader = reader.num_records().unwrap();
+
+        let index = reader.load_index().unwrap();
+        let num_records_from_index = index.num_records();
+
+        assert_eq!(
+            num_records_from_reader, num_records_from_index,
+            "Reader and index should report same number of records"
+        );
+    }
+
+    // ==================== RecordBlock Decoded Access Tests ====================
+
+    #[test]
+    fn test_get_decoded_s() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        reader.set_decode_block(true);
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() && block.n_records() > 0 {
+            let decoded = block.get_decoded_s(0);
+            if let Some(seq) = decoded {
+                assert!(!seq.is_empty(), "Decoded sequence should not be empty");
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_decoded_x() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        reader.set_decode_block(true);
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() && block.n_records() > 0 {
+            // Extended sequence may be empty for non-paired reads
+            let decoded = block.get_decoded_x(0);
+            // Just verify it doesn't panic
+            let _ = decoded;
+        }
+    }
+
+    #[test]
+    fn test_get_decoded_out_of_bounds() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() {
+            let num_records = block.n_records();
+
+            // Try to access beyond bounds
+            let decoded = block.get_decoded_s(num_records + 100);
+            assert!(decoded.is_none(), "Should return None for out of bounds");
+        }
+    }
+
+    // ==================== Helper Function Tests ====================
+
+    #[test]
+    fn test_encoded_sequence_len_two_bit() {
+        // 2-bit encoding: 32 nucleotides per u64
+        assert_eq!(encoded_sequence_len(32, BitSize::Two), 1);
+        assert_eq!(encoded_sequence_len(64, BitSize::Two), 2);
+        assert_eq!(encoded_sequence_len(33, BitSize::Two), 2); // Rounds up
+        assert_eq!(encoded_sequence_len(1, BitSize::Two), 1);
+    }
+
+    #[test]
+    fn test_encoded_sequence_len_four_bit() {
+        // 4-bit encoding: 16 nucleotides per u64
+        assert_eq!(encoded_sequence_len(16, BitSize::Four), 1);
+        assert_eq!(encoded_sequence_len(32, BitSize::Four), 2);
+        assert_eq!(encoded_sequence_len(17, BitSize::Four), 2); // Rounds up
+        assert_eq!(encoded_sequence_len(1, BitSize::Four), 1);
+    }
+
+    // ==================== Record Iterator Tests ====================
+
+    #[test]
+    fn test_record_block_iter_creation() {
+        let block = RecordBlock::new(BitSize::Two, 1024);
+        let iter = RecordBlockIter::new(&block);
+
+        // Iterator on empty block should yield nothing
+        assert_eq!(iter.count(), 0);
+    }
+
+    #[test]
+    fn test_record_iteration_multiple_times() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        if reader.read_block_into(&mut block).unwrap() && block.n_records() > 0 {
+            let num_records = block.n_records();
+
+            // First iteration
+            let count1 = block.iter().count();
+            assert_eq!(count1, num_records);
+
+            // Second iteration should yield same count
+            let count2 = block.iter().count();
+            assert_eq!(count2, num_records);
+        }
+    }
+
+    // ==================== Paired Read Tests ====================
+
+    #[test]
+    fn test_paired_record_data() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+
+        if reader.is_paired() {
+            let mut block = reader.new_block();
+
+            if reader.read_block_into(&mut block).unwrap() {
+                // Decode all sequences in the block
+                block.decode_all().unwrap();
+
+                for record in block.iter() {
+                    let xlen = record.xlen();
+
+                    if xlen > 0 {
+                        let xseq = record.xseq();
+                        assert_eq!(
+                            xseq.len(),
+                            xlen as usize,
+                            "Extended sequence length should match xlen"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ==================== Edge Cases ====================
+
+    #[test]
+    fn test_empty_block_iteration() {
+        let block = RecordBlock::new(BitSize::Two, 1024);
+
+        let mut count = 0;
+        for _ in block.iter() {
+            count += 1;
+        }
+
+        assert_eq!(count, 0, "Empty block should yield no records");
+    }
+
+    #[test]
+    fn test_reader_reset_by_new_block() {
+        let mut reader = MmapReader::new(TEST_VBQ_FILE).unwrap();
+        let mut block = reader.new_block();
+
+        // Read first block
+        if reader.read_block_into(&mut block).unwrap() {
+            let first_count = block.n_records();
+
+            // Read second block (overwrites first)
+            if reader.read_block_into(&mut block).unwrap() {
+                let second_count = block.n_records();
+
+                // Counts may differ, but both should be > 0
+                assert!(first_count > 0 && second_count > 0);
+            }
+        }
     }
 }

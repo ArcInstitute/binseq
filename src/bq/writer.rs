@@ -10,12 +10,12 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use rand::{rngs::SmallRng, SeedableRng};
+use rand::{SeedableRng, rngs::SmallRng};
 
-use super::BinseqHeader;
+use super::FileHeader;
 use crate::{
+    Policy, RNG_SEED, SequencingRecord,
     error::{Result, WriteError},
-    Policy, RNG_SEED,
 };
 
 /// Writes a single flag value to a writer in little-endian format
@@ -66,7 +66,7 @@ pub fn write_buffer<W: Write>(writer: &mut W, ebuf: &[u64]) -> Result<()> {
 #[derive(Clone)]
 pub struct Encoder {
     /// Header containing sequence length and format information
-    header: BinseqHeader,
+    header: FileHeader,
 
     /// Buffers for storing encoded nucleotides in 2-bit format
     /// Each u64 can store 32 nucleotides (64 bits / 2 bits per nucleotide)
@@ -95,12 +95,12 @@ impl Encoder {
     /// # Examples
     ///
     /// ```
-    /// # use binseq::bq::{BinseqHeaderBuilder, Encoder};
-    /// let header = BinseqHeaderBuilder::new().slen(100).build().unwrap();
+    /// # use binseq::bq::{FileHeaderBuilder, Encoder};
+    /// let header = FileHeaderBuilder::new().slen(100).build().unwrap();
     /// let encoder = Encoder::new(header);
     /// ```
     #[must_use]
-    pub fn new(header: BinseqHeader) -> Self {
+    pub fn new(header: FileHeader) -> Self {
         Self::with_policy(header, Policy::default())
     }
 
@@ -114,13 +114,13 @@ impl Encoder {
     /// # Examples
     ///
     /// ```
-    /// # use binseq::bq::{BinseqHeaderBuilder, Encoder};
+    /// # use binseq::bq::{FileHeaderBuilder, Encoder};
     /// # use binseq::Policy;
-    /// let header = BinseqHeaderBuilder::new().slen(100).build().unwrap();
+    /// let header = FileHeaderBuilder::new().slen(100).build().unwrap();
     /// let encoder = Encoder::with_policy(header, Policy::SetToA);
     /// ```
     #[must_use]
-    pub fn with_policy(header: BinseqHeader, policy: Policy) -> Self {
+    pub fn with_policy(header: FileHeader, policy: Policy) -> Self {
         Self {
             header,
             policy,
@@ -130,6 +130,12 @@ impl Encoder {
             x_ibuf: Vec::default(),
             rng: SmallRng::seed_from_u64(RNG_SEED),
         }
+    }
+
+    /// Returns whether the header is paired-end.
+    #[must_use]
+    pub fn is_paired(&self) -> bool {
+        self.header.is_paired()
     }
 
     /// Encodes a single sequence as 2-bit.
@@ -219,7 +225,7 @@ impl Encoder {
     }
 }
 
-/// Builder for creating configured `BinseqWriter` instances
+/// Builder for creating configured `Writer` instances
 ///
 /// This builder provides a flexible way to create writers with various
 /// configurations. It follows the builder pattern, allowing for optional
@@ -229,10 +235,10 @@ impl Encoder {
 ///
 /// ```
 /// # use binseq::{Policy, Result};
-/// # use binseq::bq::{BinseqHeaderBuilder, BinseqWriterBuilder};
+/// # use binseq::bq::{FileHeaderBuilder, WriterBuilder};
 /// # fn main() -> Result<()> {
-/// let header = BinseqHeaderBuilder::new().slen(100).build()?;
-/// let writer = BinseqWriterBuilder::default()
+/// let header = FileHeaderBuilder::new().slen(100).build()?;
+/// let writer = WriterBuilder::default()
 ///     .header(header)
 ///     .policy(Policy::SetToA)
 ///     .headless(false)
@@ -241,17 +247,17 @@ impl Encoder {
 /// # }
 /// ```
 #[derive(Default)]
-pub struct BinseqWriterBuilder {
+pub struct WriterBuilder {
     /// Required header defining sequence lengths and format
-    header: Option<BinseqHeader>,
+    header: Option<FileHeader>,
     /// Optional policy for handling invalid nucleotides
     policy: Option<Policy>,
     /// Optional headless mode for parallel writing scenarios
     headless: Option<bool>,
 }
-impl BinseqWriterBuilder {
+impl WriterBuilder {
     #[must_use]
-    pub fn header(mut self, header: BinseqHeader) -> Self {
+    pub fn header(mut self, header: FileHeader) -> Self {
         self.header = Some(header);
         self
     }
@@ -268,11 +274,11 @@ impl BinseqWriterBuilder {
         self
     }
 
-    pub fn build<W: Write>(self, inner: W) -> Result<BinseqWriter<W>> {
+    pub fn build<W: Write>(self, inner: W) -> Result<Writer<W>> {
         let Some(header) = self.header else {
             return Err(WriteError::MissingHeader.into());
         };
-        BinseqWriter::new(
+        Writer::new(
             inner,
             header,
             self.policy.unwrap_or_default(),
@@ -295,7 +301,7 @@ impl BinseqWriterBuilder {
 ///
 /// * `W` - The underlying writer type that implements `Write`
 #[derive(Clone)]
-pub struct BinseqWriter<W: Write> {
+pub struct Writer<W: Write> {
     /// The underlying writer for output
     inner: W,
 
@@ -306,11 +312,11 @@ pub struct BinseqWriter<W: Write> {
     /// When true, the header is not written to the output
     headless: bool,
 }
-impl<W: Write> BinseqWriter<W> {
-    /// Creates a new `BinseqWriter` instance with specified configuration
+impl<W: Write> Writer<W> {
+    /// Creates a new `Writer` instance with specified configuration
     ///
     /// This is a low-level constructor. For a more convenient way to create a
-    /// `BinseqWriter`, use the `BinseqWriterBuilder` struct.
+    /// `Writer`, use the `WriterBuilder` struct.
     ///
     /// # Arguments
     ///
@@ -321,17 +327,17 @@ impl<W: Write> BinseqWriter<W> {
     ///
     /// # Returns
     ///
-    /// * `Ok(BinseqWriter)` - A new writer instance
+    /// * `Ok(Writer)` - A new writer instance
     /// * `Err(Error)` - If writing the header fails
     ///
     /// # Examples
     ///
     /// ```
-    /// # use binseq::bq::{BinseqHeaderBuilder, BinseqWriter};
+    /// # use binseq::bq::{FileHeaderBuilder, Writer};
     /// # use binseq::{Result, Policy};
     /// # fn main() -> Result<()> {
-    /// let header = BinseqHeaderBuilder::new().slen(100).build()?;
-    /// let writer = BinseqWriter::new(
+    /// let header = FileHeaderBuilder::new().slen(100).build()?;
+    /// let writer = Writer::new(
     ///     Vec::new(),
     ///     header,
     ///     Policy::default(),
@@ -340,7 +346,7 @@ impl<W: Write> BinseqWriter<W> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(mut inner: W, header: BinseqHeader, policy: Policy, headless: bool) -> Result<Self> {
+    pub fn new(mut inner: W, header: FileHeader, policy: Policy, headless: bool) -> Result<Self> {
         if !headless {
             header.write_bytes(&mut inner)?;
         }
@@ -349,6 +355,21 @@ impl<W: Write> BinseqWriter<W> {
             encoder: Encoder::with_policy(header, policy),
             headless,
         })
+    }
+
+    /// Returns whether the header is paired-end.
+    pub fn is_paired(&self) -> bool {
+        self.encoder.is_paired()
+    }
+
+    /// Returns the header of the writer
+    pub fn header(&self) -> FileHeader {
+        self.encoder.header
+    }
+
+    /// Returns the N-policy of the writer
+    pub fn policy(&self) -> Policy {
+        self.encoder.policy
     }
 
     /// Writes a single record to the output
@@ -365,6 +386,7 @@ impl<W: Write> BinseqWriter<W> {
     /// * `Ok(true)` if the record was written successfully
     /// * `Ok(false)` if the record was not written because it was empty
     /// * `Err(WriteError::FlagSet)` if the flag is set but no flag value is provided
+    #[deprecated]
     pub fn write_record(&mut self, flag: Option<u64>, primary: &[u8]) -> Result<bool> {
         let has_flag = self.encoder.header.flags;
         if let Some(sbuffer) = self.encoder.encode_single(primary)? {
@@ -391,6 +413,7 @@ impl<W: Write> BinseqWriter<W> {
     ///
     /// # Returns
     /// * `Result<bool>` - A result indicating whether the write was successful or not
+    #[deprecated]
     pub fn write_paired_record(
         &mut self,
         flag: Option<u64>,
@@ -410,6 +433,78 @@ impl<W: Write> BinseqWriter<W> {
         }
     }
 
+    /// Writes a record using the unified [`SequencingRecord`] API
+    ///
+    /// This method provides a consistent interface with VBQ and CBQ writers.
+    /// Note that BQ format does not support quality scores or headers - these
+    /// fields from the record will be ignored.
+    ///
+    /// # Arguments
+    ///
+    /// * `record` - A [`SequencingRecord`] containing the sequence data to write
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if the record was written successfully
+    /// * `Ok(false)` if the record was skipped due to invalid nucleotides
+    /// * `Err(_)` if writing failed
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use binseq::bq::{FileHeaderBuilder, WriterBuilder};
+    /// # use binseq::{Result, SequencingRecordBuilder};
+    /// # fn main() -> Result<()> {
+    /// let header = FileHeaderBuilder::new().slen(8).build()?;
+    /// let mut writer = WriterBuilder::default()
+    ///     .header(header)
+    ///     .build(Vec::new())?;
+    ///
+    /// let record = SequencingRecordBuilder::default()
+    ///     .s_seq(b"ACGTACGT")
+    ///     .flag(42)
+    ///     .build()?;
+    ///
+    /// writer.push(record)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
+        let has_flag = self.encoder.header.flags;
+        if has_flag {
+            write_flag(&mut self.inner, record.flag().unwrap_or(0))?;
+        }
+
+        // Check paired status - writer can require paired (record must have R2),
+        // but if writer is single-end, we simply ignore any R2 data in the record.
+        if self.encoder.header.is_paired() && !record.is_paired() {
+            return Err(WriteError::ConfigurationMismatch {
+                attribute: "paired",
+                expected: self.encoder.header.is_paired(),
+                actual: record.is_paired(),
+            }
+            .into());
+        }
+
+        if self.encoder.header.is_paired() {
+            if let Some((sbuffer, xbuffer)) = self
+                .encoder
+                .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
+            {
+                write_buffer(&mut self.inner, sbuffer)?;
+                write_buffer(&mut self.inner, xbuffer)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else if let Some(buffer) = self.encoder.encode_single(record.s_seq)? {
+            write_buffer(&mut self.inner, buffer)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Consumes the writer and returns the underlying writer
     ///
     /// This is useful when you need to access the underlying writer after
@@ -418,11 +513,11 @@ impl<W: Write> BinseqWriter<W> {
     /// # Examples
     ///
     /// ```
-    /// # use binseq::bq::{BinseqHeaderBuilder, BinseqWriterBuilder};
+    /// # use binseq::bq::{FileHeaderBuilder, WriterBuilder};
     /// # use binseq::Result;
     /// # fn main() -> Result<()> {
-    /// let header = BinseqHeaderBuilder::new().slen(100).build()?;
-    /// let writer = BinseqWriterBuilder::default()
+    /// let header = FileHeaderBuilder::new().slen(100).build()?;
+    /// let writer = WriterBuilder::default()
     ///     .header(header)
     ///     .build(Vec::new())?;
     ///
@@ -438,7 +533,7 @@ impl<W: Write> BinseqWriter<W> {
     /// Gets a mutable reference to the underlying writer
     ///
     /// This allows direct access to the underlying writer while retaining
-    /// ownership of the `BinseqWriter`.
+    /// ownership of the `Writer`.
     pub fn by_ref(&mut self) -> &mut W {
         &mut self.inner
     }
@@ -496,7 +591,7 @@ impl<W: Write> BinseqWriter<W> {
     ///
     /// * `Ok(())` - If the contents were successfully ingested
     /// * `Err(Error)` - If writing the contents failed
-    pub fn ingest(&mut self, other: &mut BinseqWriter<Vec<u8>>) -> Result<()> {
+    pub fn ingest(&mut self, other: &mut Writer<Vec<u8>>) -> Result<()> {
         let other_inner = other.by_ref();
         self.inner.write_all(other_inner)?;
         other_inner.clear();
@@ -512,11 +607,11 @@ impl<W: Write> BinseqWriter<W> {
 /// - Processing very large datasets
 /// - Pipeline processing
 ///
-/// The `StreamWriter` is a specialized version of `BinseqWriter` that
+/// The `StreamWriter` is a specialized version of `Writer` that
 /// adds internal buffering and is optimized for streaming scenarios.
 pub struct StreamWriter<W: Write> {
     /// The underlying writer for processing sequences
-    writer: BinseqWriter<BufWriter<W>>,
+    writer: Writer<BufWriter<W>>,
 }
 
 impl<W: Write> StreamWriter<W> {
@@ -536,7 +631,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// * `Ok(StreamWriter)` - A new streaming writer
     /// * `Err(Error)` - If initialization fails
-    pub fn new(inner: W, header: BinseqHeader, policy: Policy, headless: bool) -> Result<Self> {
+    pub fn new(inner: W, header: FileHeader, policy: Policy, headless: bool) -> Result<Self> {
         Self::with_capacity(inner, 8192, header, policy, headless)
     }
 
@@ -560,27 +655,36 @@ impl<W: Write> StreamWriter<W> {
     pub fn with_capacity(
         inner: W,
         capacity: usize,
-        header: BinseqHeader,
+        header: FileHeader,
         policy: Policy,
         headless: bool,
     ) -> Result<Self> {
         let buffered = BufWriter::with_capacity(capacity, inner);
-        let writer = BinseqWriter::new(buffered, header, policy, headless)?;
+        let writer = Writer::new(buffered, header, policy, headless)?;
 
         Ok(Self { writer })
     }
 
+    #[deprecated(note = "use `push` method with SequencingRecord instead")]
     pub fn write_record(&mut self, flag: Option<u64>, primary: &[u8]) -> Result<bool> {
+        #[allow(deprecated)]
         self.writer.write_record(flag, primary)
     }
 
+    #[deprecated(note = "use `push` method with SequencingRecord instead")]
     pub fn write_paired_record(
         &mut self,
         flag: Option<u64>,
         primary: &[u8],
         extended: &[u8],
     ) -> Result<bool> {
+        #[allow(deprecated)]
         self.writer.write_paired_record(flag, primary, extended)
+    }
+
+    /// Writes a record using the unified [`SequencingRecord`] API
+    pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
+        self.writer.push(record)
     }
 
     /// Flushes any buffered data to the underlying writer
@@ -620,7 +724,7 @@ impl<W: Write> StreamWriter<W> {
 #[derive(Default)]
 pub struct StreamWriterBuilder {
     /// Required header defining sequence lengths and format
-    header: Option<BinseqHeader>,
+    header: Option<FileHeader>,
     /// Optional policy for handling invalid nucleotides
     policy: Option<Policy>,
     /// Optional headless mode for parallel writing scenarios
@@ -632,7 +736,7 @@ pub struct StreamWriterBuilder {
 impl StreamWriterBuilder {
     /// Sets the header for the writer
     #[must_use]
-    pub fn header(mut self, header: BinseqHeader) -> Self {
+    pub fn header(mut self, header: FileHeader) -> Self {
         self.header = Some(header);
         self
     }
@@ -690,13 +794,13 @@ mod testing {
     use std::{fs::File, io::BufWriter};
 
     use super::*;
-    use crate::bq::{BinseqHeaderBuilder, SIZE_HEADER};
+    use crate::bq::{FileHeaderBuilder, SIZE_HEADER};
 
     #[test]
     fn test_headless() -> Result<()> {
         let inner = Vec::new();
-        let mut writer = BinseqWriterBuilder::default()
-            .header(BinseqHeaderBuilder::new().slen(32).build()?)
+        let mut writer = WriterBuilder::default()
+            .header(FileHeaderBuilder::new().slen(32).build()?)
             .headless(true)
             .build(inner)?;
         assert!(writer.is_headless());
@@ -708,8 +812,8 @@ mod testing {
     #[test]
     fn test_not_headless() -> Result<()> {
         let inner = Vec::new();
-        let mut writer = BinseqWriterBuilder::default()
-            .header(BinseqHeaderBuilder::new().slen(32).build()?)
+        let mut writer = WriterBuilder::default()
+            .header(FileHeaderBuilder::new().slen(32).build()?)
             .build(inner)?;
         assert!(!writer.is_headless());
         let inner = writer.by_ref();
@@ -719,8 +823,8 @@ mod testing {
 
     #[test]
     fn test_stdout() -> Result<()> {
-        let writer = BinseqWriterBuilder::default()
-            .header(BinseqHeaderBuilder::new().slen(32).build()?)
+        let writer = WriterBuilder::default()
+            .header(FileHeaderBuilder::new().slen(32).build()?)
             .build(std::io::stdout())?;
         assert!(!writer.is_headless());
         Ok(())
@@ -730,8 +834,8 @@ mod testing {
     fn test_to_path() -> Result<()> {
         let path = "test_to_path.file";
         let inner = File::create(path).map(BufWriter::new)?;
-        let mut writer = BinseqWriterBuilder::default()
-            .header(BinseqHeaderBuilder::new().slen(32).build()?)
+        let mut writer = WriterBuilder::default()
+            .header(FileHeaderBuilder::new().slen(32).build()?)
             .build(inner)?;
         assert!(!writer.is_headless());
         let inner = writer.by_ref();
@@ -747,7 +851,7 @@ mod testing {
     fn test_stream_writer() -> Result<()> {
         let inner = Vec::new();
         let writer = StreamWriterBuilder::default()
-            .header(BinseqHeaderBuilder::new().slen(32).build()?)
+            .header(FileHeaderBuilder::new().slen(32).build()?)
             .buffer_capacity(16384)
             .build(inner)?;
 

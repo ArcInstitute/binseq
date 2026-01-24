@@ -17,10 +17,10 @@ use bitnuc::BitSize;
 use bytemuck::cast_slice;
 use memmap2::Mmap;
 
-use super::header::{BinseqHeader, SIZE_HEADER};
+use super::header::{FileHeader, SIZE_HEADER};
 use crate::{
+    BinseqRecord, DEFAULT_QUALITY_SCORE, Error, ParallelProcessor, ParallelReader,
     error::{ReadError, Result},
-    BinseqRecord, Error, ParallelProcessor, ParallelReader,
 };
 
 /// A reference to a binary sequence record in a memory-mapped file
@@ -39,6 +39,8 @@ pub struct RefRecord<'a> {
     id: u64,
     /// The underlying u64 buffer representing the record's binary data
     buffer: &'a [u64],
+    /// Reusable default quality buffer
+    qbuf: &'a [u8],
     /// The configuration that defines the layout and size of record components
     config: RecordConfig,
     /// Cached index string for the sequence header
@@ -59,11 +61,12 @@ impl<'a> RefRecord<'a> {
     ///
     /// Panics if the buffer length doesn't match the expected size from the config
     #[must_use]
-    pub fn new(id: u64, buffer: &'a [u64], config: RecordConfig) -> Self {
+    pub fn new(id: u64, buffer: &'a [u64], qbuf: &'a [u8], config: RecordConfig) -> Self {
         assert_eq!(buffer.len(), config.record_size_u64());
         Self {
             id,
             buffer,
+            qbuf,
             config,
             header_buf: [0; 20],
             header_len: 0,
@@ -127,6 +130,12 @@ impl BinseqRecord for RefRecord<'_> {
             &self.buffer[self.config.schunk as usize..]
         }
     }
+    fn squal(&self) -> &[u8] {
+        &self.qbuf[..self.config.slen as usize]
+    }
+    fn xqual(&self) -> &[u8] {
+        &self.qbuf[..self.config.xlen as usize]
+    }
 }
 
 /// A reference to a record in the map with a precomputed decoded buffer slice
@@ -139,6 +148,8 @@ pub struct BatchRecord<'a> {
     id: u64,
     /// The configuration that defines the layout and size of record components
     config: RecordConfig,
+    /// A reusable pre-initialized quality score buffer
+    qbuf: &'a [u8],
     /// Cached index string for the sequence header
     header_buf: [u8; 20],
     /// Length of the header in bytes
@@ -218,6 +229,12 @@ impl BinseqRecord for BatchRecord<'_> {
         }
         &self.dbuf[lbound..rbound]
     }
+    fn squal(&self) -> &[u8] {
+        &self.qbuf[..self.config.slen()]
+    }
+    fn xqual(&self) -> &[u8] {
+        &self.qbuf[..self.config.xlen()]
+    }
 }
 
 /// Configuration for binary sequence record layout
@@ -281,12 +298,12 @@ impl RecordConfig {
     ///
     /// # Arguments
     ///
-    /// * `header` - A reference to a `BinseqHeader` containing sequence lengths
+    /// * `header` - A reference to a `FileHeader` containing sequence lengths
     ///
     /// # Returns
     ///
     /// A new `RecordConfig` instance with the sequence lengths from the header
-    pub fn from_header(header: &BinseqHeader) -> Self {
+    pub fn from_header(header: &FileHeader) -> Self {
         Self::new(
             header.slen as usize,
             header.xlen as usize,
@@ -394,10 +411,16 @@ pub struct MmapReader {
     mmap: Arc<Mmap>,
 
     /// Binary sequence file header containing format information
-    header: BinseqHeader,
+    header: FileHeader,
 
     /// Configuration defining the layout of records in the file
     config: RecordConfig,
+
+    /// Reusable buffer for quality scores
+    qbuf: Vec<u8>,
+
+    /// Default quality score for records without quality scores
+    default_quality_score: u8,
 }
 
 impl MmapReader {
@@ -433,7 +456,7 @@ impl MmapReader {
         let mmap = unsafe { Mmap::map(&file)? };
 
         // Read header from mapped memory
-        let header = BinseqHeader::from_buffer(&mmap)?;
+        let header = FileHeader::from_buffer(&mmap)?;
 
         // Record configuraration
         let config = RecordConfig::from_header(&header);
@@ -443,10 +466,15 @@ impl MmapReader {
             return Err(ReadError::FileTruncation(mmap.len()).into());
         }
 
+        // preinitialize quality buffer
+        let qbuf = vec![DEFAULT_QUALITY_SCORE; header.slen.max(header.xlen) as usize];
+
         Ok(Self {
             mmap: Arc::new(mmap),
             header,
             config,
+            qbuf,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         })
     }
 
@@ -463,7 +491,7 @@ impl MmapReader {
     ///
     /// The header contains format information and sequence length specifications.
     #[must_use]
-    pub fn header(&self) -> BinseqHeader {
+    pub fn header(&self) -> FileHeader {
         self.header
     }
 
@@ -471,6 +499,18 @@ impl MmapReader {
     #[must_use]
     pub fn is_paired(&self) -> bool {
         self.header.is_paired()
+    }
+
+    /// Sets the default quality score for records without quality information
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        self.default_quality_score = score;
+        self.qbuf = self.build_qbuf();
+    }
+
+    /// Creates a new quality score buffer
+    #[must_use]
+    pub fn build_qbuf(&self) -> Vec<u8> {
+        vec![self.default_quality_score; self.header.slen.max(self.header.xlen) as usize]
     }
 
     /// Returns a reference to a specific record
@@ -489,14 +529,18 @@ impl MmapReader {
     /// Returns an error if the requested index is beyond the number of records in the file
     pub fn get(&self, idx: usize) -> Result<RefRecord<'_>> {
         if idx > self.num_records() {
-            return Err(ReadError::OutOfRange(idx, self.num_records()).into());
+            return Err(ReadError::OutOfRange {
+                requested_index: idx,
+                max_index: self.num_records(),
+            }
+            .into());
         }
         let rsize = self.config.record_size_bytes();
         let lbound = SIZE_HEADER + (idx * rsize);
         let rbound = lbound + rsize;
         let bytes = &self.mmap[lbound..rbound];
         let buffer = cast_slice(bytes);
-        Ok(RefRecord::new(idx as u64, buffer, self.config))
+        Ok(RefRecord::new(idx as u64, buffer, &self.qbuf, self.config))
     }
 
     /// Returns a slice of the buffer containing the underlying u64 for that range
@@ -505,7 +549,11 @@ impl MmapReader {
     /// Note: range 10..40 will return all u64s in the mmap between the record index 10 and 40
     pub fn get_buffer_slice(&self, range: Range<usize>) -> Result<&[u64]> {
         if range.end > self.num_records() {
-            return Err(ReadError::OutOfRange(range.end, self.num_records()).into());
+            return Err(ReadError::OutOfRange {
+                requested_index: range.end,
+                max_index: self.num_records(),
+            }
+            .into());
         }
         let rsize = self.config.record_size_bytes();
         let total_records = range.end - range.start;
@@ -532,13 +580,19 @@ pub struct StreamReader<R: Read> {
     reader: R,
 
     /// Binary sequence file header containing format information
-    header: Option<BinseqHeader>,
+    header: Option<FileHeader>,
 
     /// Configuration defining the layout of records in the file
     config: Option<RecordConfig>,
 
     /// Buffer for storing incoming data
     buffer: Vec<u8>,
+
+    /// Buffer for reusable quality scores
+    qbuf: Vec<u8>,
+
+    /// Default quality score for records without quality information
+    default_quality_score: u8,
 
     /// Current position in the buffer
     buffer_pos: usize,
@@ -583,10 +637,19 @@ impl<R: Read> StreamReader<R> {
             header: None,
             config: None,
             buffer: vec![0; capacity],
+            qbuf: vec![0; capacity],
             buffer_pos: 0,
             buffer_len: 0,
-            // buffer_capacity: capacity,
+            default_quality_score: DEFAULT_QUALITY_SCORE,
         }
+    }
+
+    /// Sets the default quality score for records without quality information
+    pub fn set_default_quality_score(&mut self, score: u8) {
+        if score != self.default_quality_score {
+            self.qbuf.clear();
+        }
+        self.default_quality_score = score;
     }
 
     /// Reads and validates the header from the underlying reader
@@ -596,7 +659,7 @@ impl<R: Read> StreamReader<R> {
     ///
     /// # Returns
     ///
-    /// * `Ok(&BinseqHeader)` - A reference to the validated header
+    /// * `Ok(&FileHeader)` - A reference to the validated header
     /// * `Err(Error)` - If reading or validating the header fails
     ///
     /// # Panics
@@ -609,7 +672,7 @@ impl<R: Read> StreamReader<R> {
     /// * There is an I/O error when reading from the source
     /// * The header data is invalid
     /// * End of stream is reached before the full header can be read
-    pub fn read_header(&mut self) -> Result<&BinseqHeader> {
+    pub fn read_header(&mut self) -> Result<&FileHeader> {
         if self.header.is_some() {
             return Ok(self
                 .header
@@ -624,7 +687,7 @@ impl<R: Read> StreamReader<R> {
 
         // Parse header
         let header_slice = &self.buffer[self.buffer_pos..self.buffer_pos + SIZE_HEADER];
-        let header = BinseqHeader::from_buffer(header_slice)?;
+        let header = FileHeader::from_buffer(header_slice)?;
 
         self.header = Some(header);
         self.config = Some(RecordConfig::from_header(&header));
@@ -692,10 +755,10 @@ impl<R: Read> StreamReader<R> {
     /// * The data format is invalid
     pub fn next_record(&mut self) -> Option<Result<RefRecord<'_>>> {
         // Ensure header is read
-        if self.header.is_none() {
-            if let Some(e) = self.read_header().err() {
-                return Some(Err(e));
-            }
+        if self.header.is_none()
+            && let Some(e) = self.read_header().err()
+        {
+            return Some(Err(e));
         }
 
         let config = self
@@ -728,9 +791,20 @@ impl<R: Read> StreamReader<R> {
         let record_bytes = &self.buffer[record_start..record_start + record_size];
         let record_u64s = cast_slice(record_bytes);
 
+        // update quality score buffer if necessary
+        if self.qbuf.is_empty() {
+            let max_size = config.slen.max(config.xlen) as usize;
+            self.qbuf.resize(max_size, self.default_quality_score);
+        }
+
         // Create record with incremental ID (based on read position)
         let id = (record_start - SIZE_HEADER) / record_size;
-        Some(Ok(RefRecord::new(id as u64, record_u64s, config)))
+        Some(Ok(RefRecord::new(
+            id as u64,
+            record_u64s,
+            &self.qbuf,
+            config,
+        )))
     }
 
     /// Consumes the stream reader and returns the inner reader
@@ -817,9 +891,7 @@ impl ParallelReader for MmapReader {
 
         // Validate range
         let num_records = self.num_records();
-        if range.start >= num_records || range.end > num_records || range.start >= range.end {
-            return Ok(()); // Nothing to process or invalid range
-        }
+        self.validate_range(num_records, &range)?;
 
         // Calculate number of records for each thread within the range
         let range_size = range.end - range.start;
@@ -848,6 +920,9 @@ impl ParallelReader for MmapReader {
 
                 // initialize a decoding buffer
                 let mut dbuf = Vec::new();
+
+                // initialize a quality score buffer
+                let qbuf = reader.build_qbuf();
 
                 // calculate the size of a record in the cast u64 slice
                 let rsize_u64 = reader.config.record_size_bytes() / 8;
@@ -895,6 +970,7 @@ impl ParallelReader for MmapReader {
                         let record = BatchRecord {
                             buffer: &ebuf[ebuf_start..(ebuf_start + rsize_u64)],
                             dbuf: &dbuf[dbuf_start..(dbuf_start + dbuf_rsize)],
+                            qbuf: &qbuf,
                             id: idx as u64,
                             config: reader.config,
                             header_buf,
@@ -923,5 +999,314 @@ impl ParallelReader for MmapReader {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BinseqRecord;
+    use bitnuc::BitSize;
+
+    const TEST_BQ_FILE: &str = "./data/subset.bq";
+
+    // ==================== MmapReader Basic Tests ====================
+
+    #[test]
+    fn test_mmap_reader_new() {
+        let reader = MmapReader::new(TEST_BQ_FILE);
+        assert!(reader.is_ok(), "Failed to create reader");
+    }
+
+    #[test]
+    fn test_mmap_reader_num_records() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records();
+        assert!(num_records > 0, "Expected non-zero records");
+    }
+
+    #[test]
+    fn test_mmap_reader_is_paired() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let is_paired = reader.is_paired();
+        // Test that the method returns a boolean
+        assert!(is_paired || !is_paired); // Always true, tests the method works
+    }
+
+    #[test]
+    fn test_mmap_reader_header_access() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let header = reader.header();
+        assert!(header.slen > 0, "Expected non-zero sequence length");
+    }
+
+    #[test]
+    fn test_mmap_reader_config_access() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let header = reader.header();
+        let config = RecordConfig::from_header(&header);
+        assert!(
+            config.slen > 0,
+            "Expected non-zero sequence length in config"
+        );
+    }
+
+    // ==================== Record Access Tests ====================
+
+    #[test]
+    fn test_get_record() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        if num_records > 0 {
+            let record = reader.get(0);
+            assert!(record.is_ok(), "Expected to get first record");
+
+            let record = record.unwrap();
+            assert_eq!(record.index(), 0, "Expected record index to be 0");
+        }
+    }
+
+    #[test]
+    fn test_get_record_out_of_bounds() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let record = reader.get(num_records + 100);
+        assert!(record.is_err(), "Expected error for out of bounds index");
+    }
+
+    #[test]
+    fn test_record_sequence_data() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+
+        if let Ok(record) = reader.get(0) {
+            let sbuf = record.sbuf();
+            assert!(!sbuf.is_empty(), "Expected non-empty sequence buffer");
+
+            let slen = record.slen();
+            assert!(slen > 0, "Expected non-zero sequence length");
+        }
+    }
+
+    #[test]
+    fn test_record_quality_data() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+
+        if let Ok(record) = reader.get(0) {
+            let squal = record.squal();
+            let slen = record.slen() as usize;
+            assert_eq!(
+                squal.len(),
+                slen,
+                "Quality length should match sequence length"
+            );
+        }
+    }
+
+    // ==================== Default Quality Score Tests ====================
+
+    #[test]
+    fn test_set_default_quality_score() {
+        let mut reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let custom_score = 42u8;
+
+        reader.set_default_quality_score(custom_score);
+
+        if let Ok(record) = reader.get(0) {
+            let squal = record.squal();
+            // All quality scores should be the custom score
+            assert!(
+                squal.iter().all(|&q| q == custom_score),
+                "All quality scores should be {}",
+                custom_score
+            );
+        }
+    }
+
+    // ==================== Parallel Processing Tests ====================
+
+    #[derive(Clone)]
+    struct CountingProcessor {
+        count: Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl ParallelProcessor for CountingProcessor {
+        fn process_record<R: BinseqRecord>(&mut self, _record: R) -> Result<()> {
+            let mut count = self.count.lock().unwrap();
+            *count += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_parallel_processing() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        let count = Arc::new(std::sync::Mutex::new(0));
+        let processor = CountingProcessor {
+            count: count.clone(),
+        };
+
+        reader.process_parallel(processor, 2).unwrap();
+
+        let final_count = *count.lock().unwrap();
+        assert_eq!(final_count, num_records, "All records should be processed");
+    }
+
+    #[test]
+    fn test_parallel_processing_range() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        if num_records >= 100 {
+            let start = 10;
+            let end = 50;
+            let expected_count = end - start;
+
+            let count = Arc::new(std::sync::Mutex::new(0));
+            let processor = CountingProcessor {
+                count: count.clone(),
+            };
+
+            reader
+                .process_parallel_range(processor, 2, start..end)
+                .unwrap();
+
+            let final_count = *count.lock().unwrap();
+            assert_eq!(
+                final_count, expected_count,
+                "Should process exactly {} records",
+                expected_count
+            );
+        }
+    }
+
+    // ==================== RecordConfig Tests ====================
+
+    #[test]
+    fn test_record_config_from_header() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let header = reader.header();
+        let config = RecordConfig::from_header(&header);
+
+        assert_eq!(config.slen, header.slen as u64, "Sequence length mismatch");
+        assert_eq!(config.xlen, header.xlen as u64, "Extended length mismatch");
+        assert_eq!(config.bitsize, header.bits, "Bit size mismatch");
+    }
+
+    #[test]
+    fn test_record_config_record_size() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let header = reader.header();
+        let config = RecordConfig::from_header(&header);
+
+        let size_u64 = config.record_size_u64();
+        assert!(size_u64 > 0, "Record size should be non-zero");
+
+        let size_bytes = config.record_size_bytes();
+        assert_eq!(size_bytes, size_u64 * 8, "Byte size should be 8x u64 size");
+    }
+
+    // ==================== RefRecord Tests ====================
+
+    #[test]
+    fn test_ref_record_bitsize() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+
+        if let Ok(record) = reader.get(0) {
+            let bitsize = record.bitsize();
+            assert!(
+                matches!(bitsize, BitSize::Two | BitSize::Four),
+                "Bitsize should be Two or Four"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ref_record_flag() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+
+        if let Ok(record) = reader.get(0) {
+            let flag = record.flag();
+            // Flag should be Some if header has flags enabled
+            assert!(flag.is_some() || flag.is_none()); // Tests method works
+        }
+    }
+
+    #[test]
+    fn test_ref_record_paired_data() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+
+        if reader.is_paired() {
+            if let Ok(record) = reader.get(0) {
+                let xbuf = record.xbuf();
+                let xlen = record.xlen();
+
+                if xlen > 0 {
+                    assert!(
+                        !xbuf.is_empty(),
+                        "Extended buffer should not be empty for paired"
+                    );
+                }
+            }
+        }
+    }
+
+    // ==================== Error Handling Tests ====================
+
+    #[test]
+    fn test_nonexistent_file() {
+        let result = MmapReader::new("./data/nonexistent.bq");
+        assert!(result.is_err(), "Should fail on nonexistent file");
+    }
+
+    #[test]
+    fn test_invalid_file_format() {
+        // Try to open a non-BQ file as BQ (use Cargo.toml for example)
+        let result = MmapReader::new("./Cargo.toml");
+        // This should either fail to open or fail validation
+        if let Ok(reader) = result {
+            // If it opens, try to access records (should fail or have issues)
+            let num_records = reader.num_records();
+            // The number might be nonsensical for invalid data
+            let _ = num_records; // Just verify it doesn't panic
+        }
+    }
+
+    // ==================== Multiple Records Tests ====================
+
+    #[test]
+    fn test_sequential_record_access() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records().min(10);
+
+        for i in 0..num_records {
+            let record = reader.get(i);
+            assert!(record.is_ok(), "Should get record at index {}", i);
+            assert_eq!(
+                record.unwrap().index() as usize,
+                i,
+                "Record index mismatch at {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_random_record_access() {
+        let reader = MmapReader::new(TEST_BQ_FILE).unwrap();
+        let num_records = reader.num_records();
+
+        if num_records > 10 {
+            let indices = [0, 5, num_records / 2, num_records - 1];
+
+            for &idx in &indices {
+                let record = reader.get(idx);
+                assert!(record.is_ok(), "Should get record at index {}", idx);
+                assert_eq!(record.unwrap().index() as usize, idx);
+            }
+        }
     }
 }

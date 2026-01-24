@@ -2,10 +2,10 @@ use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 
-use binseq::bq::{BinseqHeader, BinseqHeaderBuilder, StreamReader, StreamWriterBuilder};
+use binseq::bq::{FileHeader, FileHeaderBuilder, StreamReader, StreamWriterBuilder};
 use binseq::{BinseqRecord, Policy, Result};
 
-fn server(header: BinseqHeader, sequence: &[u8]) -> Result<()> {
+fn server(header: FileHeader, sequence: &[u8]) -> Result<()> {
     // Create a listener on localhost:3000
     let listener = TcpListener::bind("127.0.0.1:3000").expect("Failed to bind to address");
     println!("Server listening on 127.0.0.1:3000");
@@ -25,6 +25,7 @@ fn server(header: BinseqHeader, sequence: &[u8]) -> Result<()> {
 
     // Write sequences in a loop
     for i in 0..10 {
+        #[allow(deprecated)]
         writer.write_record(Some(i), sequence)?;
         println!("Server: Sent record {i}");
 
@@ -79,7 +80,7 @@ fn client() -> Result<()> {
 
 fn main() -> Result<()> {
     // Create a header for sequences of length 100
-    let header = BinseqHeaderBuilder::new().slen(100).build()?;
+    let header = FileHeaderBuilder::new().slen(100).build()?;
 
     // Create some example sequence data
     let sequence = b"ACGT".repeat(25); // 100 nucleotides

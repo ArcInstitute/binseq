@@ -1,6 +1,6 @@
 use binseq::{BinseqReader, BinseqRecord, ParallelProcessor, ParallelReader, Result};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
 struct RangeProcessor {

@@ -1,15 +1,15 @@
-//! # VBINSEQ Format
+//! # VBQ Format
 //!
-//! VBINSEQ is a high-performance binary format for variable-length nucleotide sequences
+//! VBQ is a high-performance binary format for variable-length nucleotide sequences
 //! that optimizes both storage efficiency and parallel processing capabilities.
 //!
 //! For more information on the format, please refer to our [preprint](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1).
 //!
 //! ## Overview
 //!
-//! VBINSEQ extends the core principles of BINSEQ to accommodate:
+//! VBQ extends the core principles of BINSEQ to accommodate:
 //!
-//! * **Variable-length sequences**: Unlike BINSEQ which requires fixed-length reads, VBINSEQ can store
+//! * **Variable-length sequences**: Unlike BINSEQ which requires fixed-length reads, VBQ can store
 //!   sequences of any length, making it suitable for technologies like PacBio and Oxford Nanopore.
 //!
 //! * **Quality scores**: Optional storage of quality scores alongside nucleotide data when needed.
@@ -30,7 +30,7 @@
 //!
 //! ## File Structure
 //!
-//! A VBINSEQ file consists of a 32-byte header followed by record blocks and an embedded index:
+//! A VBQ file consists of a 32-byte header followed by record blocks and an embedded index:
 //!
 //! ```text
 //! ┌───────────────────┐
@@ -71,14 +71,14 @@
 //! ## Recent Format Changes (v0.7.0+)
 //!
 //! * **Embedded Index**: Index data is now stored within the VBQ file itself, eliminating
-//!   separate `.vqi` files and improving portability.
+//!   improving portability.
 //! * **Headers Support**: Optional sequence identifiers can be stored with each record.
 //! * **Extended Capacity**: u64 indexing supports files with more than 4 billion records.
 //! * **Multi-bit Encoding**: Support for both 2-bit and 4-bit nucleotide encodings.
 //!
 //! ## Performance Characteristics
 //!
-//! VBINSEQ is designed for high-throughput parallel processing:
+//! VBQ is designed for high-throughput parallel processing:
 //!
 //! * Independent blocks enable true parallel processing without synchronization
 //! * Memory-mapped access provides efficient I/O
@@ -91,15 +91,15 @@
 //! ```
 //! use std::fs::File;
 //! use std::io::BufWriter;
-//! use binseq::vbq::{VBinseqHeaderBuilder, VBinseqWriterBuilder, MmapReader};
-//! use binseq::BinseqRecord;
+//! use binseq::vbq::{FileHeaderBuilder, WriterBuilder, MmapReader};
+//! use binseq::{BinseqRecord, SequencingRecordBuilder};
 //!
 //! /*
 //!    WRITING
 //! */
 //!
 //! // Create a header for sequences with quality scores and headers
-//! let header = VBinseqHeaderBuilder::new()
+//! let header = FileHeaderBuilder::new()
 //!     .qual(true)
 //!     .compressed(true)
 //!     .headers(true)
@@ -107,16 +107,19 @@
 //!
 //! // Create a writer
 //! let file = File::create("example.vbq").unwrap();
-//! let mut writer = VBinseqWriterBuilder::default()
+//! let mut writer = WriterBuilder::default()
 //!     .header(header)
 //!     .build(BufWriter::new(file))
 //!     .unwrap();
 //!
 //! // Write a sequence with quality scores and header
-//! let sequence = b"ACGTACGT";
-//! let quality = b"IIIIFFFF";
-//! let header_str = b"sequence_001";
-//! writer.write_record(None, Some(header_str), sequence, Some(quality)).unwrap();
+//! let record = SequencingRecordBuilder::default()
+//!     .s_seq(b"ACGTACGT")
+//!     .s_qual(b"IIIIFFFF")
+//!     .s_header(b"sequence_001")
+//!     .build()
+//!     .unwrap();
+//! writer.push(record).unwrap();
 //! writer.finish().unwrap();
 //!
 //! /*
@@ -147,7 +150,7 @@ mod index;
 mod reader;
 mod writer;
 
-pub use header::{BlockHeader, VBinseqHeader, VBinseqHeaderBuilder};
+pub use header::{BlockHeader, FileHeader, FileHeaderBuilder};
 pub use index::{BlockIndex, BlockRange};
 pub use reader::{MmapReader, RecordBlock, RecordBlockIter, RefRecord};
-pub use writer::{VBinseqWriter, VBinseqWriterBuilder};
+pub use writer::{Writer, WriterBuilder};

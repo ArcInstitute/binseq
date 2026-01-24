@@ -32,22 +32,22 @@ pub const SIZE_HEADER: usize = 32;
 pub const RESERVED: [u8; 17] = [42; 17];
 
 #[derive(Debug, Clone, Copy)]
-pub struct BinseqHeaderBuilder {
+pub struct FileHeaderBuilder {
     slen: Option<u32>,
     xlen: Option<u32>,
     bitsize: Option<BitSize>,
     flags: Option<bool>,
 }
-impl Default for BinseqHeaderBuilder {
+impl Default for FileHeaderBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BinseqHeaderBuilder {
+impl FileHeaderBuilder {
     #[must_use]
     pub fn new() -> Self {
-        BinseqHeaderBuilder {
+        FileHeaderBuilder {
             slen: None,
             xlen: None,
             bitsize: None,
@@ -74,8 +74,8 @@ impl BinseqHeaderBuilder {
         self.flags = Some(flags);
         self
     }
-    pub fn build(self) -> Result<BinseqHeader> {
-        Ok(BinseqHeader {
+    pub fn build(self) -> Result<FileHeader> {
+        Ok(FileHeader {
             magic: MAGIC,
             format: FORMAT,
             slen: if let Some(slen) = self.slen {
@@ -93,13 +93,13 @@ impl BinseqHeaderBuilder {
 
 /// Header structure for binary sequence files
 ///
-/// The `BinseqHeader` contains metadata about the binary sequence data stored in a file,
+/// The `FileHeader` contains metadata about the binary sequence data stored in a file,
 /// including format information, sequence lengths, and space for future extensions.
 ///
 /// The total size of this structure is 32 bytes, with a fixed layout to ensure
 /// consistent reading and writing across different platforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BinseqHeader {
+pub struct FileHeader {
     /// Magic number to identify the file format
     ///
     /// 4 bytes
@@ -135,7 +135,7 @@ pub struct BinseqHeader {
     /// 17 bytes
     pub reserved: [u8; 17],
 }
-impl BinseqHeader {
+impl FileHeader {
     /// Creates a new header with the specified sequence length
     ///
     /// This constructor initializes a standard header with the given sequence length,
@@ -150,7 +150,7 @@ impl BinseqHeader {
     ///
     /// # Returns
     ///
-    /// A new `BinseqHeader` instance
+    /// A new `FileHeader` instance
     #[must_use]
     pub fn new(bits: BitSize, slen: u32, flags: bool) -> Self {
         Self {
@@ -178,7 +178,7 @@ impl BinseqHeader {
     ///
     /// # Returns
     ///
-    /// A new `BinseqHeader` instance with extended sequence information
+    /// A new `FileHeader` instance with extended sequence information
     #[must_use]
     pub fn new_extended(bits: BitSize, slen: u32, xlen: u32, flags: bool) -> Self {
         Self {
@@ -214,7 +214,7 @@ impl BinseqHeader {
     ///
     /// # Returns
     ///
-    /// * `Ok(BinseqHeader)` - A valid header parsed from the buffer
+    /// * `Ok(FileHeader)` - A valid header parsed from the buffer
     /// * `Err(Error)` - If the buffer contains invalid header data
     ///
     /// # Errors
@@ -266,7 +266,7 @@ impl BinseqHeader {
     ///
     /// # Returns
     ///
-    /// * `Ok(BinseqHeader)` - A valid header parsed from the buffer
+    /// * `Ok(FileHeader)` - A valid header parsed from the buffer
     /// * `Err(Error)` - If the buffer is too small or contains invalid header data
     ///
     /// # Errors
@@ -324,7 +324,7 @@ impl BinseqHeader {
     ///
     /// # Returns
     ///
-    /// * `Ok(BinseqHeader)` - A valid header read from the reader
+    /// * `Ok(FileHeader)` - A valid header read from the reader
     /// * `Err(Error)` - If reading from the reader failed or the header data is invalid
     ///
     /// # Errors

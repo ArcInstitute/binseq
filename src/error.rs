@@ -12,6 +12,10 @@ pub enum Error {
     #[error("Error processing header: {0}")]
     HeaderError(#[from] HeaderError),
 
+    /// Errors related to the CBQ format
+    #[error("Error processing CBQ: {0}")]
+    CbqError(#[from] CbqError),
+
     /// Errors that occur during write operations
     #[error("Error writing file: {0}")]
     WriteError(#[from] WriteError),
@@ -44,30 +48,17 @@ pub enum Error {
     BitnucError(#[from] bitnuc::Error),
 
     /// Conversion errors from anyhow errors
+    #[cfg(feature = "anyhow")]
     #[error("Generic error: {0}")]
     AnyhowError(#[from] anyhow::Error),
 
     /// Generic errors for other unexpected situations
     #[error("Generic error: {0}")]
     GenericError(#[from] Box<dyn StdError + Send + Sync>),
-}
-impl Error {
-    /// Checks if the error is an index mismatch error
-    ///
-    /// This is useful for determining if a file's index is out of sync with its content,
-    /// which might require rebuilding the index.
-    ///
-    /// # Returns
-    ///
-    /// * `true` if the error is an `IndexError::ByteSizeMismatch`
-    /// * `false` for all other error types
-    #[must_use]
-    pub fn is_index_mismatch(&self) -> bool {
-        match self {
-            Self::IndexError(err) => err.is_mismatch(),
-            _ => false,
-        }
-    }
+
+    #[cfg(feature = "paraseq")]
+    #[error("Fastx encoding error: {0}")]
+    FastxEncodingError(#[from] FastxEncodingError),
 }
 
 /// Errors specific to processing and validating binary sequence headers
@@ -125,8 +116,14 @@ pub enum ReadError {
     /// # Arguments
     /// * First `usize` - The requested record index
     /// * Second `usize` - The maximum available record index
-    #[error("Requested record index ({0}) is out of record range ({1})")]
-    OutOfRange(usize, usize),
+    #[error("Requested record index ({requested_index}) is out of record range ({max_index})")]
+    OutOfRange {
+        requested_index: usize,
+        max_index: usize,
+    },
+
+    #[error("Invalid range specified: start ({start}) is greater than end ({end})")]
+    InvalidRange { start: usize, end: usize },
 
     /// End of stream was reached while reading
     #[error("End of stream reached")]
@@ -151,7 +148,7 @@ pub enum ReadError {
     #[error("Unable to find an expected full block at position {0}")]
     UnexpectedEndOfFile(usize),
 
-    /// When the file metadata doesn't match the expected VBINSEQ format
+    /// When the file metadata doesn't match the expected VBQ format
     #[error("Unexpected file metadata")]
     InvalidFileType,
 
@@ -169,6 +166,29 @@ pub enum BuilderError {
 /// Errors that can occur while writing binary sequence data
 #[derive(thiserror::Error, Debug)]
 pub enum WriteError {
+    /// Error between configuration of writer and incoming sequencing record
+    #[error(
+        "Cannot push record ({attribute}: {actual}) with writer configuration ({attribute}: {expected})"
+    )]
+    ConfigurationMismatch {
+        attribute: &'static str,
+        expected: bool,
+        actual: bool,
+    },
+
+    #[error("Cannot ingest writer with incompatible formats")]
+    FormatMismatch,
+
+    #[error(
+        "Missing required sequence length, expected (primary: {exp_primary}, extended: {exp_extended}), got (primary: {obs_primary}, extended: {obs_extended})"
+    )]
+    MissingSequenceLength {
+        exp_primary: bool,
+        exp_extended: bool,
+        obs_primary: bool,
+        obs_extended: bool,
+    },
+
     /// The length of the sequence being written does not match what was specified in the header
     ///
     /// # Fields
@@ -211,9 +231,10 @@ pub enum WriteError {
     /// When a record is too large to fit in a block of the configured size
     ///
     /// The first parameter is the record size, the second is the maximum block size
-    #[error("Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size.")]
+    #[error(
+        "Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size."
+    )]
     RecordSizeExceedsMaximumBlockSize(usize, usize),
-
     /// When trying to ingest blocks with different sizes than expected
     ///
     /// The first parameter is the expected size, the second is the found size
@@ -225,13 +246,17 @@ pub enum WriteError {
     /// When trying to ingest data with an incompatible header
     ///
     /// The first parameter is the expected header, the second is the found header
-    #[error("Incompatible headers found in VBinseqWriter::ingest. Found ({1:?}) Expected ({0:?})")]
-    IncompatibleHeaders(crate::vbq::VBinseqHeader, crate::vbq::VBinseqHeader),
+    #[error("Incompatible headers found in vbq::Writer::ingest. Found ({1:?}) Expected ({0:?})")]
+    IncompatibleHeaders(crate::vbq::FileHeader, crate::vbq::FileHeader),
+
+    /// When building a `SequencingRecord` without a primary sequence
+    #[error("SequencingRecordBuilder requires a primary sequence (s_seq)")]
+    MissingSequence,
 }
 
-/// Errors related to VBINSEQ file indexing
+/// Errors related to VBQ file indexing
 ///
-/// These errors occur when there are issues with the index of a VBINSEQ file,
+/// These errors occur when there are issues with the index of a VBQ file,
 /// such as corruption or mismatches with the underlying file.
 #[derive(thiserror::Error, Debug)]
 pub enum IndexError {
@@ -241,35 +266,64 @@ pub enum IndexError {
     #[error("Invalid magic number: {0}")]
     InvalidMagicNumber(u64),
 
-    /// When the index references a file that doesn't exist
-    ///
-    /// The parameter is the missing file path
-    #[error("Index missing upstream file path: {0}")]
-    MissingUpstreamFile(String),
-
-    /// When the size of the file doesn't match what the index expects
-    ///
-    /// The first parameter is the actual file size, the second is the expected size
-    #[error("Mismatch in size between upstream size: {0} and expected index size {1}")]
-    ByteSizeMismatch(u64, u64),
-
     /// Invalid reserved bytes in the index header
     #[error("Invalid reserved bytes in index header")]
     InvalidReservedBytes,
 }
-impl IndexError {
-    /// Checks if this error indicates a mismatch between the index and file
-    ///
-    /// This is useful to determine if the index needs to be rebuilt.
-    ///
-    /// # Returns
-    ///
-    /// * `true` for `ByteSizeMismatch` errors
-    /// * `true` for any other error type (this behavior is likely a bug and should be fixed)
-    #[must_use]
-    pub fn is_mismatch(&self) -> bool {
-        matches!(self, Self::ByteSizeMismatch(_, _) | _) // Note: this appears to always return true regardless of error type
-    }
+
+#[derive(thiserror::Error, Debug)]
+pub enum CbqError {
+    #[error(
+        "Record size ({record_size}) exceeds maximum block size ({max_block_size}) - Try increasing block size."
+    )]
+    ExceedsMaximumBlockSize {
+        max_block_size: usize,
+        record_size: usize,
+    },
+
+    #[error("Cannot ingest block of size {other_block_size} into block of size {self_block_size}")]
+    CannotIngestBlock {
+        self_block_size: usize,
+        other_block_size: usize,
+    },
+
+    /// Attempting to write a record into a full block
+    #[error(
+        "Block(size: {block_size}) will be exceeded by record size {record_size}. Current size: {current_size}"
+    )]
+    BlockFull {
+        current_size: usize,
+        record_size: usize,
+        block_size: usize,
+    },
+
+    #[error("Invalid block header MAGIC found")]
+    InvalidBlockHeaderMagic,
+
+    #[error("Invalid file header MAGIC found")]
+    InvalidFileHeaderMagic,
+
+    #[error("Invalid index header MAGIC found")]
+    InvalidIndexHeaderMagic,
+
+    #[error("Invalid index footer MAGIC found")]
+    InvalidIndexFooterMagic,
+
+    #[error("Unable to cast bytes to Index - likely an alignment error")]
+    IndexCastingError,
+
+    #[error("SequenceRecordBuilder failed on build due to missing primary sequence (`s_seq`)")]
+    MissingSequenceOnSequencingRecord,
+}
+
+#[cfg(feature = "paraseq")]
+#[derive(thiserror::Error, Debug)]
+pub enum FastxEncodingError {
+    #[error("Empty FASTX file")]
+    EmptyFastxFile,
+
+    #[error("Builder not provided with any input")]
+    MissingInput,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -311,5 +365,250 @@ mod testing {
         let my_error = MyError::CustomError(String::from("some error"));
         let binseq_error = my_error.into_binseq_error();
         assert!(matches!(binseq_error, Error::GenericError(_)));
+    }
+
+    // ==================== HeaderError Tests ====================
+
+    #[test]
+    fn test_header_error_invalid_magic_number() {
+        let error = HeaderError::InvalidMagicNumber(0xDEADBEEF);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("0xdeadbeef") || error_str.contains("3735928559"));
+    }
+
+    #[test]
+    fn test_header_error_invalid_format_version() {
+        let error = HeaderError::InvalidFormatVersion(99);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("99"));
+    }
+
+    #[test]
+    fn test_header_error_invalid_bit_size() {
+        let error = HeaderError::InvalidBitSize(8);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("8"));
+        assert!(error_str.contains("[2,4]"));
+    }
+
+    #[test]
+    fn test_header_error_invalid_size() {
+        let error = HeaderError::InvalidSize(100, 200);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("100"));
+        assert!(error_str.contains("200"));
+    }
+
+    // ==================== ReadError Tests ====================
+
+    #[test]
+    fn test_read_error_out_of_range() {
+        let error = ReadError::OutOfRange {
+            requested_index: 150,
+            max_index: 100,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("150"));
+        assert!(error_str.contains("100"));
+    }
+
+    #[test]
+    fn test_read_error_file_truncation() {
+        let error = ReadError::FileTruncation(12345);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("12345"));
+    }
+
+    #[test]
+    fn test_read_error_partial_record() {
+        let error = ReadError::PartialRecord(42);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("42"));
+    }
+
+    #[test]
+    fn test_read_error_invalid_block_magic_number() {
+        let error = ReadError::InvalidBlockMagicNumber(0xBADC0DE, 1000);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("1000"));
+    }
+
+    // ==================== WriteError Tests ====================
+
+    #[test]
+    fn test_write_error_configuration_mismatch() {
+        let error = WriteError::ConfigurationMismatch {
+            attribute: "paired",
+            expected: true,
+            actual: false,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("paired"));
+        assert!(error_str.contains("true"));
+        assert!(error_str.contains("false"));
+    }
+
+    #[test]
+    fn test_write_error_unexpected_sequence_length() {
+        let error = WriteError::UnexpectedSequenceLength {
+            expected: 100,
+            got: 150,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("100"));
+        assert!(error_str.contains("150"));
+    }
+
+    #[test]
+    fn test_write_error_invalid_nucleotide_sequence() {
+        let error = WriteError::InvalidNucleotideSequence("ACGTNX".to_string());
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("ACGTNX"));
+    }
+
+    #[test]
+    fn test_write_error_record_size_exceeds_max() {
+        let error = WriteError::RecordSizeExceedsMaximumBlockSize(2000, 1024);
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("2000"));
+        assert!(error_str.contains("1024"));
+    }
+
+    #[test]
+    fn test_write_error_missing_sequence_length() {
+        let error = WriteError::MissingSequenceLength {
+            exp_primary: true,
+            exp_extended: false,
+            obs_primary: false,
+            obs_extended: false,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("Missing required sequence length"));
+    }
+
+    // ==================== CbqError Tests ====================
+
+    #[test]
+    fn test_cbq_error_exceeds_maximum_block_size() {
+        let error = CbqError::ExceedsMaximumBlockSize {
+            max_block_size: 1024,
+            record_size: 2048,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("1024"));
+        assert!(error_str.contains("2048"));
+    }
+
+    #[test]
+    fn test_cbq_error_block_full() {
+        let error = CbqError::BlockFull {
+            current_size: 900,
+            record_size: 200,
+            block_size: 1024,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("900"));
+        assert!(error_str.contains("200"));
+        assert!(error_str.contains("1024"));
+    }
+
+    #[test]
+    fn test_cbq_error_cannot_ingest_block() {
+        let error = CbqError::CannotIngestBlock {
+            self_block_size: 1024,
+            other_block_size: 2048,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("1024"));
+        assert!(error_str.contains("2048"));
+    }
+
+    // ==================== BuilderError Tests ====================
+
+    #[test]
+    fn test_builder_error_missing_slen() {
+        let error = BuilderError::MissingSlen;
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("Missing sequence length"));
+    }
+
+    // ==================== ExtensionError Tests ====================
+
+    #[test]
+    fn test_extension_error_unsupported() {
+        let error = ExtensionError::UnsupportedExtension("test.xyz".to_string());
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("test.xyz"));
+    }
+
+    // ==================== Error Conversion Tests ====================
+
+    #[test]
+    fn test_error_from_header_error() {
+        let header_error = HeaderError::InvalidMagicNumber(0x1234);
+        let error: Error = header_error.into();
+        assert!(matches!(error, Error::HeaderError(_)));
+    }
+
+    #[test]
+    fn test_error_from_write_error() {
+        let write_error = WriteError::MissingHeader;
+        let error: Error = write_error.into();
+        assert!(matches!(error, Error::WriteError(_)));
+    }
+
+    #[test]
+    fn test_error_from_read_error() {
+        let read_error = ReadError::EndOfStream;
+        let error: Error = read_error.into();
+        assert!(matches!(error, Error::ReadError(_)));
+    }
+
+    #[test]
+    fn test_error_from_index_error() {
+        let index_error = IndexError::InvalidMagicNumber(0x5678);
+        let error: Error = index_error.into();
+        assert!(matches!(error, Error::IndexError(_)));
+    }
+
+    #[test]
+    fn test_error_from_cbq_error() {
+        let cbq_error = CbqError::InvalidBlockHeaderMagic;
+        let error: Error = cbq_error.into();
+        assert!(matches!(error, Error::CbqError(_)));
+    }
+
+    #[test]
+    fn test_error_from_builder_error() {
+        let builder_error = BuilderError::MissingSlen;
+        let error: Error = builder_error.into();
+        assert!(matches!(error, Error::BuilderError(_)));
+    }
+
+    #[test]
+    fn test_error_debug_output() {
+        let error = Error::WriteError(WriteError::MissingHeader);
+        let debug_str = format!("{:?}", error);
+        assert!(debug_str.contains("WriteError"));
+    }
+
+    // ==================== Fastx Error Tests (conditional) ====================
+
+    #[cfg(feature = "paraseq")]
+    #[test]
+    fn test_fastx_error_empty_file() {
+        use super::FastxEncodingError;
+        let error = FastxEncodingError::EmptyFastxFile;
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("Empty FASTX file"));
+    }
+
+    #[cfg(feature = "paraseq")]
+    #[test]
+    fn test_fastx_error_missing_input() {
+        use super::FastxEncodingError;
+        let error = FastxEncodingError::MissingInput;
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("not provided with any input"));
     }
 }

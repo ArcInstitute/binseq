@@ -2,37 +2,40 @@
 //!
 //! # BINSEQ
 //!
-//! The `binseq` library provides efficient APIs for working with the [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1) file format family.
+//! The `binseq` library provides efficient APIs for working with the [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) file format family.
 //!
 //! It offers methods to read and write BINSEQ files, providing:
 //!
 //! - Compact multi-bit encoding and decoding of nucleotide sequences through [`bitnuc`](https://docs.rs/bitnuc/latest/bitnuc/)
-//! - Memory-mapped file access for efficient reading ([`bq::MmapReader`] and [`vbq::MmapReader`])
-//! - Parallel processing capabilities for arbitrary tasks through the [`ParallelProcessor`] trait.
-//! - Configurable [`Policy`] for handling invalid nucleotides
 //! - Support for both single and paired-end sequences
-//! - Optional sequence headers/identifiers (VBQ format)
-//! - Abstract [`BinseqRecord`] trait for representing records from both `.bq` and `.vbq` files.
-//! - Abstract [`BinseqReader`] enum for processing records from both `.bq` and `.vbq` files.
+//! - Abstract [`BinseqRecord`] trait for representing records from all variants
+//! - Abstract [`BinseqReader`] enum for processing records from all variants
+//! - Abstract [`BinseqWriter`] enum for writing records to all variants
+//! - Parallel processing capabilities for arbitrary tasks through the [`ParallelProcessor`] trait.
+//! - Configurable [`Policy`] for handling invalid nucleotides (BQ/VBQ, CBQ natively supports `N` nucleotides)
+//!
+//! ## Recent additions (v0.9.0):
+//!
+//! ### New variant: CBQ
+//! **[`cbq`]** is a new variant of BINSEQ that solves many of the pain points around VBQ.
+//! The CBQ format is a columnar-block-based format that offers improved compression and faster processing speeds compared to VBQ.
+//! It natively supports `N` nucleotides and avoids the need for additional 4-bit encoding.
+//!
+//! ### Improved interface for writing records
+//! **[`BinseqWriter`]** provides a unified interface for writing records generically to BINSEQ files.
+//! This makes use of the new [`SequencingRecord`] which provides a cleaner builder API for writing records to BINSEQ files.
 //!
 //! ## Recent VBQ Format Changes (v0.7.0+)
 //!
 //! The VBQ format has undergone significant improvements:
 //!
 //! - **Embedded Index**: VBQ files now contain their index data embedded at the end of the file,
-//!   eliminating separate `.vqi` index files and improving portability.
+//!   improving portability.
 //! - **Headers Support**: Optional sequence identifiers/headers can be stored with each record.
 //! - **Extended Capacity**: u64 indexing supports files with more than 4 billion records.
 //! - **Multi-bit Encoding**: Support for both 2-bit and 4-bit nucleotide encodings.
 //!
 //! Legacy VBQ files are automatically migrated to the new format when accessed.
-//!
-//! ## Crate Organization
-//!
-//! This library is split into 3 major parts.
-//!
-//! There are the [`bq`] and [`vbq`] modules, which provide tools for reading and writing `BQ` and `VBQ` files respectively.
-//! Then there are traits and utilities that are ubiquitous across the library which are available at the top-level of the crate.
 //!
 //! # Example: Memory-mapped Access
 //!
@@ -87,22 +90,32 @@ mod parallel;
 /// Invalid nucleotide policy
 mod policy;
 
-/// Record trait shared between BINSEQ variants
+/// Record types and traits shared between BINSEQ variants
 mod record;
 
 /// VBQ - Variable length records, optional quality scores, compressed blocks
 pub mod vbq;
 
+/// CBQ - Columnar variable length records, optional quality scores and headers
+pub mod cbq;
+
 /// Prelude - Commonly used types and traits
 pub mod prelude;
 
-/// Context - Reusable state for parallel processing
-pub mod context;
+/// Write operations generic over the BINSEQ variant
+pub mod write;
+
+/// Utilities for working with BINSEQ files
+pub mod utils;
 
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};
-pub use record::BinseqRecord;
+pub use record::{BinseqRecord, SequencingRecord, SequencingRecordBuilder};
+pub use write::{BinseqWriter, BinseqWriterBuilder};
 
 /// Re-export `bitnuc::BitSize`
 pub use bitnuc::BitSize;
+
+/// Default quality score for BINSEQ readers without quality scores
+pub(crate) const DEFAULT_QUALITY_SCORE: u8 = b'?';
