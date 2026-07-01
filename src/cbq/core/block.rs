@@ -457,6 +457,9 @@ impl ColumnarBlock {
             // read the leading zeros and reconstruct an empty EliasFano (`num_ones() == 0`),
             // silently dropping every N on decode. See ArcInstitute/binseq#94.
             self.ef_bytes.clear();
+            // Pre-size (capacity only, not length): the decompressed EF is exactly
+            // `len_nef` bytes, so this avoids reallocations while `copy_decode` appends.
+            self.ef_bytes.reserve(self.len_nef);
             copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
 
             let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
