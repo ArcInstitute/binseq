@@ -112,6 +112,7 @@ impl ColumnarBlock {
             self.num_records = 0;
             self.current_size = 0;
             self.num_npos = 0;
+            self.len_nef = 0;
         }
 
         // clear spans
@@ -450,7 +451,12 @@ impl ColumnarBlock {
 
         // decompress npos
         if !self.z_npos.is_empty() {
-            self.ef_bytes.resize(self.len_nef, 0);
+            // Clear (do NOT `resize(len_nef, 0)`): `copy_decode`'s destination is a
+            // `&mut Vec<u8>`, whose `io::Write` impl *appends*. Pre-filling with zeros would
+            // leave `ef_bytes == [0; len_nef] ++ [real EF bytes]`, so `deserialize_from` would
+            // read the leading zeros and reconstruct an empty EliasFano (`num_ones() == 0`),
+            // silently dropping every N on decode. See ArcInstitute/binseq#94.
+            self.ef_bytes.clear();
             copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
 
             let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
