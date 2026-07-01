@@ -451,4 +451,145 @@ mod tests {
 
         Ok(())
     }
+
+    // ==================== N-nucleotide round-trip (issue #94) ====================
+    //
+    // CBQ stores `N` as a 2-bit placeholder `A` plus an Elias-Fano index of the
+    // N-positions that is used to backfill `N` on decode. These tests guard the
+    // serial `Reader`/`decompress_columns` path, which previously dropped every N
+    // (decoding it back as `A`). See ArcInstitute/binseq#94.
+
+    /// Build a `FileHeader` with quality scores and headers enabled.
+    fn header_with_quality_headers(block_size: usize) -> FileHeader {
+        FileHeaderBuilder::default()
+            .is_paired(false)
+            .with_headers(true)
+            .with_qualities(true)
+            .with_flags(false)
+            .with_block_size(block_size)
+            .build()
+    }
+
+    /// Read back every record's `(sequence, quality, header)` from a finished CBQ buffer.
+    fn read_all_records(bytes: Vec<u8>) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        let mut reader = Reader::new(Cursor::new(bytes)).expect("failed to open reader");
+        let mut out = Vec::new();
+        let mut cumulative = 0u64;
+        while let Some(block_header) = reader.read_block().expect("failed to read block") {
+            cumulative += block_header.num_records;
+            reader
+                .block
+                .decompress_columns()
+                .expect("failed to decompress block");
+            let range = BlockRange::new(0, cumulative);
+            for rec in reader.block.iter_records(range) {
+                out.push((
+                    rec.sseq().to_vec(),
+                    rec.squal().to_vec(),
+                    rec.sheader().to_vec(),
+                ));
+            }
+        }
+        out
+    }
+
+    /// Sequences with `N` at every notable position: leading, interior, trailing,
+    /// all-N, and a no-N control. Direct reproduction of ArcInstitute/binseq#94.
+    #[test]
+    fn test_n_roundtrip_serial_edge_positions() -> Result<()> {
+        let seqs: Vec<&[u8]> = vec![
+            b"NACGTACGT", // leading
+            b"ACGTNACGT", // interior
+            b"ACGTACGTN", // trailing
+            b"NNNNNNNN",  // all-N
+            b"ACGTACGT",  // no-N control
+        ];
+
+        // Large block size: all records land in a single block.
+        let mut writer = ColumnarBlockWriter::new(Vec::new(), header(1 << 20))?;
+        for &seq in &seqs {
+            writer.push(record(seq))?;
+        }
+        writer.finish()?;
+
+        let read_back = read_all_sequences(writer.inner);
+        let expected: Vec<Vec<u8>> = seqs.iter().map(|s| s.to_vec()).collect();
+        assert_eq!(read_back, expected, "N positions must round-trip verbatim");
+        Ok(())
+    }
+
+    /// Many N-containing sequences with a small block size, forcing multiple
+    /// blocks. Guards per-block Elias-Fano correctness and `ef_bytes`/`len_nef`
+    /// reuse across `clear()`.
+    #[test]
+    fn test_n_roundtrip_serial_multi_block() -> Result<()> {
+        let seqs: Vec<Vec<u8>> = (0..64u32)
+            .map(|i| {
+                if i % 5 == 0 {
+                    // occasionally all-N
+                    vec![b'N'; 8]
+                } else {
+                    // vary N placement so per-block position sets differ
+                    let mut s = vec![b'A', b'C', b'G', b'T', b'A', b'C', b'G', b'T'];
+                    let pos = i as usize % s.len();
+                    s[pos] = b'N';
+                    s
+                }
+            })
+            .collect();
+
+        let mut writer = ColumnarBlockWriter::new(Vec::new(), header(64))?;
+        for seq in &seqs {
+            writer.push(record(seq))?;
+        }
+        writer.finish()?;
+
+        // Sanity: the small block size must actually span more than one block.
+        assert!(
+            writer.headers.len() > 1,
+            "expected multiple blocks, got {}",
+            writer.headers.len()
+        );
+
+        let read_back = read_all_sequences(writer.inner);
+        assert_eq!(
+            read_back, seqs,
+            "N round-trip must hold across multiple blocks"
+        );
+        Ok(())
+    }
+
+    /// Mirrors the exact reproduction in ArcInstitute/binseq#94: quality + headers
+    /// enabled, with N at leading / all / interior positions.
+    #[test]
+    fn test_n_roundtrip_with_quality_and_headers() -> Result<()> {
+        let records: [(&[u8], &[u8], &[u8]); 3] = [
+            (b"r1", b"NACGTACGT", b"IIIIIIIII"),
+            (b"r2", b"NNNNNNNN", b"IIIIIIII"),
+            (b"r3", b"ACGTNACGT", b"IIIIIIIII"),
+        ];
+
+        let mut writer =
+            ColumnarBlockWriter::new(Vec::new(), header_with_quality_headers(1 << 20))?;
+        for (h, s, q) in records {
+            let rec = SequencingRecordBuilder::default()
+                .s_header(h)
+                .s_seq(s)
+                .s_qual(q)
+                .build()?;
+            writer.push(rec)?;
+        }
+        writer.finish()?;
+
+        let read_back = read_all_records(writer.inner);
+        let expected: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = records
+            .iter()
+            .map(|(h, s, q)| (s.to_vec(), q.to_vec(), h.to_vec()))
+            .collect();
+        assert_eq!(
+            read_back, expected,
+            "seq/qual/header must round-trip with N present"
+        );
+        Ok(())
+    }
 }

@@ -634,4 +634,79 @@ mod tests {
         let final_count = *count.lock().unwrap();
         assert_eq!(final_count, num_records);
     }
+
+    // ==================== N-nucleotide round-trip (issue #94) ====================
+
+    /// Collects each record's `(global index, decoded sequence)` during parallel
+    /// processing so the result can be re-ordered and compared to the input.
+    #[derive(Clone)]
+    struct SeqCollector {
+        seqs: Arc<std::sync::Mutex<Vec<(u64, Vec<u8>)>>>,
+    }
+    impl ParallelProcessor for SeqCollector {
+        fn process_record<R: BinseqRecord>(&mut self, record: R) -> Result<()> {
+            let mut buf = Vec::new();
+            record.decode_s(&mut buf)?;
+            self.seqs.lock().unwrap().push((record.index(), buf));
+            Ok(())
+        }
+    }
+
+    /// The mmap / `process_parallel` decode path must restore every `N`.
+    /// Complements the serial-path tests in `write.rs` for ArcInstitute/binseq#94.
+    #[test]
+    fn test_n_roundtrip_parallel_mmap() -> Result<()> {
+        use crate::{BinseqWriterBuilder, SequencingRecordBuilder, write::Format};
+
+        // N-containing sequences; a small block size forces multiple blocks so
+        // several threads each decode N-bearing blocks.
+        let seqs: Vec<Vec<u8>> = (0..128u32)
+            .map(|i| {
+                if i % 7 == 0 {
+                    vec![b'N'; 8]
+                } else {
+                    let mut s = vec![b'A', b'C', b'G', b'T', b'A', b'C', b'G', b'T'];
+                    let pos = i as usize % s.len();
+                    s[pos] = b'N';
+                    s
+                }
+            })
+            .collect();
+
+        let path =
+            std::env::temp_dir().join(format!("binseq_n94_parallel_{}.cbq", std::process::id()));
+
+        // Write to a real file (MmapReader requires a path).
+        {
+            let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+                .block_size(64)
+                .build(std::fs::File::create(&path)?)?;
+            for seq in &seqs {
+                writer.push(SequencingRecordBuilder::default().s_seq(seq).build()?)?;
+            }
+            writer.finish()?;
+        }
+
+        // Decode back in parallel via mmap.
+        let collected = Arc::new(std::sync::Mutex::new(Vec::<(u64, Vec<u8>)>::new()));
+        {
+            let reader = MmapReader::new(&path)?;
+            assert!(reader.num_blocks() > 1, "expected multiple blocks");
+            let processor = SeqCollector {
+                seqs: collected.clone(),
+            };
+            reader.process_parallel(processor, 4)?;
+        }
+
+        let _ = std::fs::remove_file(&path);
+
+        let mut got = Arc::try_unwrap(collected).unwrap().into_inner().unwrap();
+        got.sort_by_key(|(idx, _)| *idx);
+        let got_seqs: Vec<Vec<u8>> = got.into_iter().map(|(_, s)| s).collect();
+        assert_eq!(
+            got_seqs, seqs,
+            "parallel mmap decode must round-trip N positions"
+        );
+        Ok(())
+    }
 }
