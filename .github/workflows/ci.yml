@@ -20,14 +20,28 @@ jobs:
       - name: Run tests (release)
         run: cargo test --verbose --release
 
+  # `zstd-rs` is an alternative zstd backend (see src/zstdlib/mod.rs) - mutually exclusive with the
+  # default `zstd-c` backend, so it's built/tested separately rather than folded into
+  # `--all-features`.
+  build_zstd_rs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build (zstd-rs backend)
+        run: cargo build --verbose --no-default-features --features paraseq,anyhow,zstd-rs
+      - name: Run tests (zstd-rs backend)
+        run: cargo test --verbose --no-default-features --features paraseq,anyhow,zstd-rs
+
   fmt_lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Formatting
         run: cargo fmt --check
-      - name: Linting
-        run: cargo clippy --all-features --all-targets -- -D warnings
+      - name: Linting (zstd-c backend)
+        run: cargo clippy --features paraseq,anyhow,zstd-c --all-targets -- -D warnings
+      - name: Linting (zstd-rs backend)
+        run: cargo clippy --no-default-features --features paraseq,anyhow,zstd-rs --all-targets -- -D warnings
 
   example_grep:
     runs-on: ubuntu-latest
