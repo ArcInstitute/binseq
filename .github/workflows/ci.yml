@@ -20,17 +20,28 @@ jobs:
       - name: Run tests (release)
         run: cargo test --verbose --release
 
-  # `zstd-rs` is an alternative zstd backend (see src/zstdlib/mod.rs) - mutually exclusive with the
-  # default `zstd-c` backend, so it's built/tested separately rather than folded into
-  # `--all-features`.
-  build_zstd_rs:
+  # `anyhow` and `paraseq` are independent optional toggles, and `zstd-c`/`zstd-rs`
+  # (see src/zstdlib/mod.rs) are mutually exclusive backends so `--all-features`
+  # can't cover them.
+  #
+  # Scoped to `--lib`/`--doc`
+  feature_matrix:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [zstd-c, zstd-rs]
+        anyhow: [true, false]
+        paraseq: [true, false]
     steps:
       - uses: actions/checkout@v7
-      - name: Build (zstd-rs backend)
-        run: cargo build --verbose --no-default-features --features paraseq,anyhow,zstd-rs
-      - name: Run tests (zstd-rs backend)
-        run: cargo test --verbose --no-default-features --features paraseq,anyhow,zstd-rs
+      - name: Build + test (backend=${{ matrix.backend }}, anyhow=${{ matrix.anyhow }}, paraseq=${{ matrix.paraseq }})
+        run: |
+          FEATURES="${{ matrix.backend }}"
+          if [ "${{ matrix.anyhow }}" = "true" ]; then FEATURES="$FEATURES,anyhow"; fi
+          if [ "${{ matrix.paraseq }}" = "true" ]; then FEATURES="$FEATURES,paraseq"; fi
+          cargo build --verbose --lib --no-default-features --features "$FEATURES"
+          cargo test --verbose --lib --doc --no-default-features --features "$FEATURES"
 
   fmt_lint:
     runs-on: ubuntu-latest
