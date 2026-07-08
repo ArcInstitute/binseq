@@ -1,8 +1,7 @@
 use std::io;
 
-use zstd::zstd_safe;
-
 use crate::Result;
+use crate::zstdlib::zstd_safe;
 
 pub(crate) fn sized_compress(
     dst: &mut Vec<u8>,

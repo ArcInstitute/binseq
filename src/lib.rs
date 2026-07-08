@@ -108,6 +108,9 @@ pub mod write;
 /// Utilities for working with BINSEQ files
 pub mod utils;
 
+/// Internal zstd backend selection (see module docs for details)
+mod zstdlib;
+
 pub use error::{Error, IntoBinseqError, Result};
 pub use parallel::{BinseqReader, ParallelProcessor, ParallelReader};
 pub use policy::{Policy, RNG_SEED};

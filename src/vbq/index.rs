@@ -39,13 +39,13 @@ use std::{
 };
 
 use byteorder::{ByteOrder, LittleEndian};
-use zstd::{Decoder, Encoder};
 
 use super::{
     BlockHeader, FileHeader,
     header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
 };
 use crate::error::{IndexError, Result};
+use crate::zstdlib::{Decoder, Encoder};
 
 /// Size of `BlockRange` in bytes
 pub const SIZE_BLOCK_RANGE: usize = 32;

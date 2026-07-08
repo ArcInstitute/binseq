@@ -17,6 +17,7 @@ bitnuc = "0.4.0"
 bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 byteorder = "1.5.0"
 itoa = "1.0.17"
+libzstd-rs-sys = { version = "0.0.1-prerelease.2", optional = true }
 memchr = "2.7.6"
 memmap2 = "0.9.9"
 num_cpus = "1.17.0"
@@ -25,18 +26,27 @@ parking_lot = {version = "0.12.5", optional = true }
 rand = { version = "0.9.2", features = ["small_rng"] }
 sucds = "0.8.3"
 thiserror = "2.0.17"
-zstd = { version = "0.13.3", features = ["zstdmt"] }
+zstd = { version = "0.13.3", features = ["zstdmt"], optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.100"
 parking_lot = "0.12.5"
 clap = { version = "4.5.54", features = ["derive"] }
+criterion = "0.8.2"
 paraseq = "0.4.8"
 
+[[bench]]
+name = "zstd_backend"
+harness = false
+
 [features]
-default = ["paraseq", "anyhow"]
+default = ["paraseq", "anyhow", "zstd-c"]
 anyhow = ["dep:anyhow"]
 paraseq = ["dep:paraseq", "dep:parking_lot"]
+
+# Mutually exclusive zstd backends - see `src/zstdlib/mod.rs`.
+zstd-c = ["dep:zstd"]
+zstd-rs = ["dep:libzstd-rs-sys"]
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

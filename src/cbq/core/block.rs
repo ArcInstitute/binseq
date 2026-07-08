@@ -4,11 +4,11 @@ use bitnuc::BitSize;
 use bytemuck::{cast_slice, cast_slice_mut};
 use sucds::Serializable;
 use sucds::mii_sequences::{EliasFano, EliasFanoBuilder};
-use zstd::stream::copy_decode;
-use zstd::zstd_safe;
 
 use crate::cbq::core::utils::sized_compress;
 use crate::error::{CbqError, WriteError};
+use crate::zstdlib::stream::copy_decode;
+use crate::zstdlib::zstd_safe;
 use crate::{BinseqRecord, DEFAULT_QUALITY_SCORE, Result};
 
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
@@ -971,7 +971,6 @@ mod tests {
     use crate::Error;
     use crate::SequencingRecordBuilder;
     use crate::cbq::core::FileHeaderBuilder;
-    use zstd::zstd_safe;
 
     fn full_header(block_size: usize) -> FileHeader {
         FileHeaderBuilder::default()

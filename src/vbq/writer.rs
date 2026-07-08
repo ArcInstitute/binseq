@@ -68,7 +68,6 @@ use bitnuc::BitSize;
 use byteorder::{LittleEndian, WriteBytesExt};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use zstd::stream::copy_encode;
 
 use super::header::{BlockHeader, FileHeader};
 use crate::SequencingRecord;
@@ -77,6 +76,7 @@ use crate::policy::{Policy, RNG_SEED};
 use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
 use crate::vbq::index::{INDEX_END_MAGIC, IndexHeader};
 use crate::vbq::{BlockIndex, BlockRange};
+use crate::zstdlib::stream::copy_encode;
 
 /// A builder for creating configured `Writer` instances
 ///

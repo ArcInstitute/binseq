@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
-use zstd::stream::copy_encode;
 
+use crate::zstdlib::stream::copy_encode;
 use crate::{Result, error::CbqError};
 
 use super::{BlockHeader, FileHeader, INDEX_MAGIC};

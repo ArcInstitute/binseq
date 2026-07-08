@@ -1,10 +1,9 @@
 use std::io;
 
-use zstd::zstd_safe;
-
 use crate::{
     Result, SequencingRecord,
     cbq::core::{BlockHeader, ColumnarBlock, FileHeader, Index, IndexFooter, IndexHeader},
+    zstdlib::zstd_safe,
 };
 
 /// Writer for CBQ files operating on generic writers (streaming).

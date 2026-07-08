@@ -57,7 +57,6 @@ use std::sync::Arc;
 use bitnuc::BitSize;
 use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
-use zstd::zstd_safe;
 
 use super::{
     BlockHeader, BlockIndex, BlockRange, FileHeader,
@@ -65,6 +64,7 @@ use super::{
 };
 use crate::DEFAULT_QUALITY_SCORE;
 use crate::vbq::index::{INDEX_END_MAGIC, INDEX_HEADER_SIZE, IndexHeader};
+use crate::zstdlib::zstd_safe;
 use crate::{
     BinseqRecord, ParallelProcessor, ParallelReader,
     error::{ReadError, Result},
