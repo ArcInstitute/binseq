@@ -1,4 +1,6 @@
-use binseq::{BinseqReader, BinseqRecord, ParallelProcessor, ParallelReader, Result};
+use binseq::{
+    BinseqReader, BinseqRecord, IntoBinseqError, ParallelProcessor, ParallelReader, Result,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -79,7 +81,7 @@ fn main() -> Result<()> {
         .get(2)
         .unwrap_or(&"4".to_string())
         .parse::<usize>()
-        .map_err(|e| binseq::Error::from(anyhow::Error::from(e)))?;
+        .map_err(IntoBinseqError::into_binseq_error)?;
 
     // Create reader to get total record count
     let reader = BinseqReader::new(file_path)?;
@@ -93,13 +95,13 @@ fn main() -> Result<()> {
         .get(3)
         .map(|s| s.parse::<usize>())
         .transpose()
-        .map_err(|e| binseq::Error::from(anyhow::Error::from(e)))?
+        .map_err(IntoBinseqError::into_binseq_error)?
         .unwrap_or(0);
     let end = args
         .get(4)
         .map(|s| s.parse::<usize>())
         .transpose()
-        .map_err(|e| binseq::Error::from(anyhow::Error::from(e)))?
+        .map_err(IntoBinseqError::into_binseq_error)?
         .unwrap_or(total_records.min(10_000)); // Default to first 10k records
 
     // Validate range
