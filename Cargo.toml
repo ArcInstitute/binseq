@@ -48,6 +48,13 @@ paraseq = ["dep:paraseq", "dep:parking_lot"]
 zstd-c = ["dep:zstd"]
 zstd-rs = ["dep:libzstd-rs-sys"]
 
+# Enables libzstd-rs-sys's `unsafe-performance-experimental` (skips bounds checks in
+# a few decompression hot paths via `get_unchecked`/`unreachable_unchecked`).
+#
+# Exploration and testing shows equivalent results as `zstd-rs` on decompression path
+# but likely too unstable to ship as a default
+zstd-rs-unsafe-perf = ["zstd-rs", "libzstd-rs-sys/unsafe-performance-experimental"]
+
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 cast_possible_truncation = "allow"
