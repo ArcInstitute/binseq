@@ -364,6 +364,12 @@ impl ColumnarBlock {
     }
 
     /// Find all positions of 'N' in the sequence
+    // sucds returns `anyhow::Result`. `anyhow` is an optional dependency here, so
+    // `anyhow::Error` can't be named directly in code that must build without the
+    // `anyhow` feature - the closure form lets type inference resolve it instead.
+    // Clippy's suggested fix (naming the method path directly) doesn't compile
+    // without the feature enabled.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn fill_npos(&mut self) -> Result<()> {
         self.npos
             .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64));
@@ -374,8 +380,11 @@ impl ColumnarBlock {
             self.ef = None;
             Ok(())
         } else {
-            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())?;
-            ef_builder.extend(self.npos.iter().map(|idx| *idx as usize))?;
+            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())
+                .map_err(|e| e.into_boxed_dyn_error())?;
+            ef_builder
+                .extend(self.npos.iter().map(|idx| *idx as usize))
+                .map_err(|e| e.into_boxed_dyn_error())?;
             let ef = ef_builder.build();
 
             self.ef = Some(ef);
@@ -395,6 +404,8 @@ impl ColumnarBlock {
     }
 
     /// Compress all native columns into compressed representation
+    // See the comment on `fill_npos` re: the `anyhow::Error` closure below.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn compress_columns(&mut self, cctx: &mut zstd_safe::CCtx) -> Result<()> {
         // compress sequence lengths
 
@@ -406,7 +417,13 @@ impl ColumnarBlock {
 
         // compress N-positions (Elias-Fano encoded)
         if let Some(ef) = self.ef.as_ref() {
-            ef.serialize_into(&mut self.ef_bytes)?;
+            // sucds returns `anyhow::Result`. `anyhow::Error` doesn't implement
+            // `std::error::Error` (so `IntoBinseqError` can't apply), and it has
+            // several ambiguous `Into<Box<dyn Error + ...>>` impls, so route through
+            // its own `into_boxed_dyn_error` to land on the always-available
+            // `Error::GenericError` variant regardless of the `anyhow` feature.
+            ef.serialize_into(&mut self.ef_bytes)
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.len_nef = self.ef_bytes.len();
             sized_compress(&mut self.z_npos, &self.ef_bytes, cctx)?;
         }
@@ -438,6 +455,8 @@ impl ColumnarBlock {
     /// as `&mut [T]`. Passing a resized `&mut Vec<T>` will lead to an
     /// append operation, not an overwrite. If passing `&mut Vec<T>`, the
     /// `Vec` will be resized automatically by `copy_decode`.
+    // See the comment on `fill_npos` re: the `anyhow::Error` closure below.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     pub fn decompress_columns(&mut self) -> Result<()> {
         // decompress sequence lengths
         {
@@ -459,7 +478,8 @@ impl ColumnarBlock {
             self.ef_bytes.reserve(self.len_nef);
             copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
 
-            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.num_npos = ef.len();
             self.ef = Some(ef);
         }
@@ -567,6 +587,8 @@ impl ColumnarBlock {
         Ok(())
     }
 
+    // See the comment on `fill_npos` re: the `anyhow::Error` closure below.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     pub fn decompress_from_bytes(
         &mut self,
         bytes: &[u8],
@@ -627,7 +649,8 @@ impl ColumnarBlock {
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
 
             // reinitialize the EliasFano encoding
-            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.num_npos = ef.len();
             self.ef = Some(ef);
         }
