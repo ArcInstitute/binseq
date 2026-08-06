@@ -380,6 +380,36 @@ mod tests {
         assert!(num_blocks > 0, "Should have at least one block");
     }
 
+    // ==================== Empty File Tests ====================
+
+    /// A CBQ file containing zero records (e.g. produced when an upstream
+    /// filter discards every read) has an empty index. Reading the index
+    /// back must not fail: `bytemuck::try_cast_slice` rejects the empty
+    /// decompressed buffer because its dangling pointer is not aligned for
+    /// `BlockRange`, so `Index::from_bytes` needs an explicit empty guard.
+    #[test]
+    fn test_read_index_empty_file() {
+        use std::io::Cursor;
+
+        use crate::cbq::{ColumnarBlockWriter, core::FileHeaderBuilder};
+
+        let header = FileHeaderBuilder::default()
+            .is_paired(false)
+            .with_headers(false)
+            .with_qualities(false)
+            .with_flags(false)
+            .with_block_size(64)
+            .build();
+        let mut writer = ColumnarBlockWriter::new(Vec::new(), header).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = Reader::new(Cursor::new(writer.inner_data().to_vec())).unwrap();
+        while reader.read_block().unwrap().is_some() {}
+        let index = reader.read_index().unwrap().expect("index should exist");
+        assert_eq!(index.num_records(), 0);
+        assert_eq!(index.num_blocks(), 0);
+    }
+
     // ==================== Default Quality Score Tests ====================
 
     #[test]
