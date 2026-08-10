@@ -332,6 +332,10 @@ impl ParallelReader for MmapReader {
 }
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::BinseqRecord;
 
@@ -378,6 +382,53 @@ mod tests {
         let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
         let num_blocks = reader.num_blocks();
         assert!(num_blocks > 0, "Should have at least one block");
+    }
+
+    // ==================== Empty File Tests ====================
+
+    fn make_empty_cbq() -> Vec<u8> {
+        use crate::cbq::{ColumnarBlockWriter, core::FileHeaderBuilder};
+        let header = FileHeaderBuilder::default()
+            .is_paired(false)
+            .with_headers(false)
+            .with_qualities(false)
+            .with_flags(false)
+            .with_block_size(64)
+            .build();
+        let mut writer = ColumnarBlockWriter::new(Vec::new(), header).unwrap();
+        writer.finish().unwrap();
+        writer.inner_data().to_vec()
+    }
+
+    /// A CBQ file containing zero records (e.g. produced when an upstream
+    /// filter discards every read) has an empty index. Reading the index
+    /// back must not fail: `bytemuck::try_cast_slice` rejects the empty
+    /// decompressed buffer because its dangling pointer is not aligned for
+    /// `BlockRange`, so `Index::from_bytes` needs an explicit empty guard.
+    #[test]
+    fn test_read_index_empty_file() {
+        use std::io::Cursor;
+
+        let empty_cbq = make_empty_cbq();
+        let mut reader = Reader::new(Cursor::new(empty_cbq)).unwrap();
+        while reader.read_block().unwrap().is_some() {}
+        let index = reader.read_index().unwrap().expect("index should exist");
+        assert_eq!(index.num_records(), 0);
+        assert_eq!(index.num_blocks(), 0);
+    }
+
+    #[test]
+    fn test_read_index_empty_file_mmap() {
+        let empty_cbq = make_empty_cbq();
+
+        let ntf = NamedTempFile::new().unwrap();
+        let (mut tmpfile, tmppath) = ntf.into_parts();
+        tmpfile.write_all(&empty_cbq).unwrap();
+
+        let reader = MmapReader::new(tmppath).unwrap();
+        let index = reader.index();
+        assert_eq!(index.num_records(), 0);
+        assert_eq!(index.num_blocks(), 0);
     }
 
     // ==================== Default Quality Score Tests ====================

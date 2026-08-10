@@ -109,6 +109,13 @@ impl Index {
 
     /// Builds the index from a byte slice
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        // A zero-record CBQ has an empty index whose decompressed buffer has
+        // a dangling pointer, which fails `try_cast_slice`'s alignment check.
+        if bytes.is_empty() {
+            return Ok(Self {
+                ranges: Vec::default(),
+            });
+        }
         let ranges = match bytemuck::try_cast_slice(bytes) {
             Ok(ranges) => ranges.to_vec(),
             Err(_) => return Err(CbqError::IndexCastingError.into()),
