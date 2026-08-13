@@ -2,7 +2,7 @@ use std::{fs::File, io::BufWriter};
 
 use anyhow::Result;
 use binseq::{BinseqWriterBuilder, write::Format};
-use bitnuc::BitSize;
+use binseq::BitSize;
 use clap::Parser;
 
 type BoxedWriter = Box<dyn std::io::Write + Send>;

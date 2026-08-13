@@ -91,7 +91,7 @@ pub fn write_fastq_parts<W: Write>(
     sequence: &[u8],
     quality: &[u8],
 ) -> Result<(), std::io::Error> {
-    writer.write_all(b"@seq.")?;
+    writer.write_all(b"@")?;
     writer.write_all(index)?;
     writer.write_all(b"\n")?;
     writer.write_all(sequence)?;

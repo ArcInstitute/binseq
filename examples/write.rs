@@ -8,7 +8,7 @@ use binseq::{
     SequencingRecordBuilder,
     write::{BinseqWriter, BinseqWriterBuilder, Format},
 };
-use bitnuc::BitSize;
+use binseq::BitSize;
 use clap::Parser;
 use paraseq::{
     Record, fastx,
