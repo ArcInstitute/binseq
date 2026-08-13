@@ -4,7 +4,7 @@
 //! The header contains metadata about the binary sequence data, including format version,
 //! sequence length, and other information necessary for proper interpretation of the data.
 
-use bitnuc::BitSize;
+use bitnuc_deprec::BitSize;
 use byteorder::{ByteOrder, LittleEndian};
 use std::io::{Read, Write};
 

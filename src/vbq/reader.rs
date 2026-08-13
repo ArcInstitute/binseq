@@ -54,7 +54,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
-use bitnuc::BitSize;
+use bitnuc_deprec::BitSize;
 use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
 use zstd::zstd_safe;
@@ -486,11 +486,11 @@ impl RecordBlock {
         match self.bitsize {
             BitSize::Two => {
                 let num_bp = self.sequences.len() * 32;
-                bitnuc::twobit::decode(&self.sequences, num_bp, &mut self.dbuf)
+                bitnuc_deprec::twobit::decode(&self.sequences, num_bp, &mut self.dbuf)
             }
             BitSize::Four => {
                 let num_bp = self.sequences.len() * 16;
-                bitnuc::fourbit::decode(&self.sequences, num_bp, &mut self.dbuf)
+                bitnuc_deprec::fourbit::decode(&self.sequences, num_bp, &mut self.dbuf)
             }
         }?;
         Ok(())

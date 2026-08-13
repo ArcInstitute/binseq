@@ -115,7 +115,7 @@ pub use record::{BinseqRecord, SequencingRecord, SequencingRecordBuilder};
 pub use write::{BinseqWriter, BinseqWriterBuilder};
 
 /// Re-export `bitnuc::BitSize`
-pub use bitnuc::BitSize;
+pub use bitnuc_deprec::BitSize;
 
 /// Default quality score for BINSEQ readers without quality scores
 pub(crate) const DEFAULT_QUALITY_SCORE: u8 = b'?';

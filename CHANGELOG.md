@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-08-12
+
+### Changed
+
+- `cbq` uses the `bitnuc` implementation with `u8`-based encoding with better SIMD perf
+  - Does **not** change on-disk representation - block reading/writing is still done with u64 byte-boundaries and the format is unchanged.
+- `cbq` blocks now use `bitnuc::ambiguous_bases` to find noncanonical bases instead of just `N` and adds them to the `npos` index.
+- dependency both on `bitnuc-0.4` and `bitnuc-0.5` to keep 4-bit support for `bq` and `vbq` which is unsupported in `bitnuc-0.5.x`.
+
 ## [0.9.5] - 2026-08-10
 
 ### Fixed

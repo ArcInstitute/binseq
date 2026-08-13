@@ -44,9 +44,13 @@ pub enum Error {
     #[error("Error determining BINSEQ format: {0}")]
     FormatError(#[from] FormatError),
 
-    /// Errors from the bitnuc dependency for nucleotide encoding/decoding
+    /// Errors from the deprecated bitnuc dependency for nucleotide encoding/decoding (bq/vbq)
     #[error("Bitnuc error: {0}")]
-    BitnucError(#[from] bitnuc::Error),
+    BitnucError(#[from] bitnuc_deprec::Error),
+
+    /// Errors from the bitnuc dependency for nucleotide encoding/decoding (cbq)
+    #[error("Bitnuc error: {0}")]
+    BitnucEncodingError(#[from] bitnuc::BitnucError),
 
     /// Conversion errors from anyhow errors
     #[cfg(feature = "anyhow")]

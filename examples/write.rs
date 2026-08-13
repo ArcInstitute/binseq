@@ -4,11 +4,11 @@ use std::{
 };
 
 use anyhow::{Result, bail};
+use binseq::BitSize;
 use binseq::{
     SequencingRecordBuilder,
     write::{BinseqWriter, BinseqWriterBuilder, Format},
 };
-use bitnuc::BitSize;
 use clap::Parser;
 use paraseq::{
     Record, fastx,
