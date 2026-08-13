@@ -64,7 +64,7 @@
 
 use std::io::Write;
 
-use bitnuc::BitSize;
+use bitnuc_deprec::BitSize;
 use byteorder::{LittleEndian, WriteBytesExt};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;

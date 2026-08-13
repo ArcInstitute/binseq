@@ -1500,7 +1500,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_single_minimal() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         let record = minimal_single_record();
         // s_len (8) + x_len (8) + s_seq (32 nucs = 1 word = 8 bytes)
         let size = record.configured_size_vbq(false, false, false, false, BitSize::Two);
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_single_with_flags() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         let record = full_single_record();
         // s_len (8) + x_len (8) + flag (8) + s_seq (8)
         let size = record.configured_size_vbq(false, true, false, false, BitSize::Two);
@@ -1518,7 +1518,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_single_with_all() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         let record = full_single_record();
         // s_len (8) + x_len (8) + flag (8) + s_seq (8) + s_qual (32) + s_header_len (8) + s_header (5)
         let size = record.configured_size_vbq(false, true, true, true, BitSize::Two);
@@ -1527,7 +1527,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_paired_minimal() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         let record = full_paired_record();
         // s_len (8) + x_len (8) + s_seq (8) + x_seq (8)
         let size = record.configured_size_vbq(true, false, false, false, BitSize::Two);
@@ -1536,7 +1536,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_paired_with_all() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         let record = full_paired_record();
         // s_len (8) + x_len (8) + flag (8) + s_seq (8) + x_seq (8)
         // + s_qual (32) + x_qual (32)
@@ -1547,7 +1547,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_paired_record_single_writer() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         // A paired record being written to a single-end writer
         // should only count R1 data
         let record = full_paired_record();
@@ -1558,7 +1558,7 @@ mod tests {
 
     #[test]
     fn test_configured_size_vbq_four_bit_encoding() {
-        use bitnuc::BitSize;
+        use bitnuc_deprec::BitSize;
         let record = minimal_single_record();
         // With 4-bit encoding: 2 nucleotides per byte, 16 per word
         // 32 nucleotides = 2 words = 16 bytes

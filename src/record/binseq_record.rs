@@ -1,5 +1,5 @@
 use auto_impl::auto_impl;
-use bitnuc::BitSize;
+use bitnuc_deprec::BitSize;
 
 use crate::Result;
 

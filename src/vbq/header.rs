@@ -14,7 +14,7 @@
 
 use std::io::{Read, Write};
 
-use bitnuc::BitSize;
+use bitnuc_deprec::BitSize;
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::error::{HeaderError, ReadError, Result};

@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
-use bitnuc::BitSize;
+use bitnuc_deprec::BitSize;
 use bytemuck::cast_slice;
 use memmap2::Mmap;
 
@@ -1013,7 +1013,7 @@ impl ParallelReader for MmapReader {
 mod tests {
     use super::*;
     use crate::BinseqRecord;
-    use bitnuc::BitSize;
+    use bitnuc_deprec::BitSize;
 
     const TEST_BQ_FILE: &str = "./data/subset.bq";
 
