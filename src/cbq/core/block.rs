@@ -1,6 +1,5 @@
 use std::io;
 
-use bitnuc::BitSize;
 use bytemuck::{cast_slice, cast_slice_mut};
 use sucds::Serializable;
 use sucds::mii_sequences::{EliasFano, EliasFanoBuilder};
@@ -9,7 +8,7 @@ use zstd::zstd_safe;
 
 use crate::cbq::core::utils::sized_compress;
 use crate::error::{CbqError, WriteError};
-use crate::{BinseqRecord, DEFAULT_QUALITY_SCORE, Result};
+use crate::{BinseqRecord, BitSize, DEFAULT_QUALITY_SCORE, Result};
 
 use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
 use super::{BlockHeader, BlockRange, FileHeader};
@@ -32,7 +31,10 @@ pub struct ColumnarBlock {
     pub(crate) npos: Vec<u64>,
 
     /// Reusable buffer for encoding sequences
-    ebuf: Vec<u64>,
+    ///
+    /// Byte-native 2-bit packing, zero-padded to whole 8-byte words to
+    /// remain bit-identical with the legacy u64-per-32-bases on-disk layout.
+    ebuf: Vec<u8>,
 
     /// An Elias-Fano encoding for the N-positions
     pub(crate) ef: Option<EliasFano>,
@@ -350,23 +352,23 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    /// Returns the expected length of the encoded sequence buffer
+    /// Returns the expected length of the encoded sequence buffer in bytes
     ///
     /// This is deterministically calculated based on the sequence length and the encoding scheme.
+    /// The on-disk format packs 32 bases per 8-byte word, so the buffer is padded to whole words.
     fn ebuf_len(&self) -> usize {
-        self.nuclen.div_ceil(32)
+        self.nuclen.div_ceil(32) * 8
     }
 
     /// Encode the sequence into a compressed representation
-    fn encode_sequence(&mut self) -> Result<()> {
-        bitnuc::twobit::encode_with_invalid(&self.seq, &mut self.ebuf)?;
-        Ok(())
+    fn encode_sequence(&mut self) {
+        bitnuc::encode_resize(&self.seq, &mut self.ebuf);
+        self.ebuf.resize(self.ebuf_len(), 0); // zero-pad the trailing partial word to match the legacy u64 layout
     }
 
     /// Find all positions of 'N' in the sequence
     fn fill_npos(&mut self) -> Result<()> {
-        self.npos
-            .extend(memchr::memchr_iter(b'N', &self.seq).map(|i| i as u64));
+        bitnuc::ambiguous_bases(&self.seq, &mut self.npos);
         self.num_npos = self.npos.len();
 
         // build Elias-Fano encoding for N positions
@@ -412,7 +414,7 @@ impl ColumnarBlock {
         }
 
         // compress sequence
-        sized_compress(&mut self.z_seq, cast_slice(&self.ebuf), cctx)?;
+        sized_compress(&mut self.z_seq, &self.ebuf, cctx)?;
 
         // compress flags
         if !self.flags.is_empty() {
@@ -467,9 +469,9 @@ impl ColumnarBlock {
         // decompress sequence
         {
             self.ebuf.resize(self.ebuf_len(), 0);
-            copy_decode(self.z_seq.as_slice(), cast_slice_mut(&mut self.ebuf))?;
+            copy_decode(self.z_seq.as_slice(), self.ebuf.as_mut_slice())?;
 
-            bitnuc::twobit::decode(&self.ebuf, self.nuclen, &mut self.seq)?;
+            bitnuc::decode_resize(&self.ebuf, self.nuclen, &mut self.seq)?;
             self.backfill_npos();
         }
 
@@ -519,7 +521,7 @@ impl ColumnarBlock {
         }
 
         // encode all sequences at once
-        self.encode_sequence()?;
+        self.encode_sequence();
 
         // fill npos
         self.fill_npos()?;
@@ -637,12 +639,12 @@ impl ColumnarBlock {
             let ebuf_len = self.ebuf_len();
             resize_uninit(&mut self.ebuf, ebuf_len);
             dctx.decompress(
-                cast_slice_mut(&mut self.ebuf),
+                self.ebuf.as_mut_slice(),
                 slice_and_increment(&mut byte_offset, header.len_z_seq, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
 
-            bitnuc::twobit::decode(&self.ebuf, self.nuclen, &mut self.seq)?;
+            bitnuc::decode_resize(&self.ebuf, self.nuclen, &mut self.seq)?;
             self.backfill_npos();
         }
 
@@ -1009,6 +1011,72 @@ mod tests {
             .flag(42)
             .build()
             .unwrap()
+    }
+
+    // ==================== On-disk compatibility with the legacy u64 packing ====================
+
+    /// The byte-native encoder (padded to whole 8-byte words) must stay
+    /// bit-identical with the legacy u64-per-32-bases packing so cbq files
+    /// remain interchangeable across binseq versions in both directions.
+    #[test]
+    fn test_ebuf_matches_legacy_word_stream() {
+        for len in [1usize, 5, 9, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1000] {
+            let seq: Vec<u8> = (0..len).map(|i| b"ACGT"[(i * 7 + 3) % 4]).collect();
+
+            // new path, as performed by `encode_sequence`
+            let mut ebuf = Vec::new();
+            bitnuc::encode_resize(&seq, &mut ebuf);
+            ebuf.resize(len.div_ceil(32) * 8, 0);
+
+            // legacy path, as performed by the previous implementation
+            let mut legacy_words: Vec<u64> = Vec::new();
+            bitnuc_deprec::twobit::encode_with_invalid(&seq, &mut legacy_words).unwrap();
+            assert_eq!(ebuf, cast_slice::<u64, u8>(&legacy_words), "len {len}");
+
+            // legacy words decode with the new decoder (old files, new reader)
+            let mut dbuf = Vec::new();
+            bitnuc::decode_resize(cast_slice(&legacy_words), len, &mut dbuf).unwrap();
+            assert_eq!(dbuf, seq, "len {len}");
+
+            // new bytes decode with the legacy decoder (new files, old reader)
+            let new_words: Vec<u64> = bytemuck::pod_collect_to_vec(&ebuf);
+            let mut old_dbuf = Vec::new();
+            bitnuc_deprec::twobit::decode(&new_words, len, &mut old_dbuf).unwrap();
+            assert_eq!(old_dbuf, seq, "len {len}");
+        }
+    }
+
+    /// N positions are restored from the Elias-Fano index regardless of how
+    /// the encoder packs them, so blocks written with either bitnuc decode
+    /// identically once `backfill_npos` runs.
+    #[test]
+    fn test_npos_backfill_covers_encoder_differences() {
+        let seq = b"ACGTNNACGTNACGTACGTACGTACGTACGTNNNNACGTACGTACGTACGTACGTACGTACGTN";
+
+        let header = unpaired_header(1 << 16);
+        let mut block = ColumnarBlock::new(header);
+        block
+            .push(
+                SequencingRecordBuilder::default()
+                    .s_seq(seq)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let mut cctx = zstd_safe::CCtx::create();
+        let mut buffer = Vec::new();
+        let block_header = block.flush_to(&mut buffer, &mut cctx).unwrap().unwrap();
+
+        let mut cursor =
+            std::io::Cursor::new(buffer[std::mem::size_of::<BlockHeader>()..].to_vec());
+        let mut reader_block = ColumnarBlock::new(header);
+        reader_block.read_from(&mut cursor, block_header).unwrap();
+        reader_block.decompress_columns().unwrap();
+
+        let range = BlockRange::new(0, block_header.num_records);
+        let rec = reader_block.iter_records(range).next().unwrap();
+        assert_eq!(rec.sseq(), seq);
     }
 
     // ==================== push()/validate_record() error paths ====================
