@@ -49,6 +49,7 @@
 //! }
 //! ```
 
+use core::fmt::NumBuffer;
 use std::fs::File;
 use std::ops::Range;
 use std::path::Path;
@@ -542,7 +543,7 @@ impl RecordBlock {
 pub struct RecordBlockIter<'a> {
     block: &'a RecordBlock,
     pos: usize,
-    header_buffer: itoa::Buffer,
+    header_buffer: NumBuffer<u64>,
     qbuf: &'a [u8],
 }
 impl<'a> RecordBlockIter<'a> {
@@ -551,7 +552,7 @@ impl<'a> RecordBlockIter<'a> {
         Self {
             block,
             pos: 0,
-            header_buffer: itoa::Buffer::new(),
+            header_buffer: NumBuffer::new(),
             qbuf: &block.qbuf,
         }
     }
@@ -571,7 +572,7 @@ impl<'a> Iterator for RecordBlockIter<'a> {
         let mut header_buf = [0; 20];
         let mut header_len = 0;
         if meta.s_header_span.len == 0 && meta.x_header_span.len == 0 {
-            let header_str = self.header_buffer.format(index);
+            let header_str = index.format_into(&mut self.header_buffer);
             header_len = header_str.len();
             header_buf[..header_len].copy_from_slice(header_str.as_bytes());
         }

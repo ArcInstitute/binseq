@@ -7,6 +7,7 @@
 //! It supports both sequential and parallel processing of records,
 //! with configurable record layouts for different sequence types.
 
+use core::fmt::NumBuffer;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
@@ -920,7 +921,7 @@ impl ParallelReader for MmapReader {
                 }
 
                 // create a reusable buffer for translating record IDs
-                let mut translater = itoa::Buffer::new();
+                let mut translater = NumBuffer::new();
 
                 // initialize a decoding buffer
                 let mut dbuf = Vec::new();
@@ -959,7 +960,7 @@ impl ParallelReader for MmapReader {
                     // iterate over each index in the range
                     for (inner_idx, idx) in (range_start..range_end).enumerate() {
                         // translate the index
-                        let id_str = translater.format(idx);
+                        let id_str = idx.format_into(&mut translater);
 
                         // create the index buffer
                         let mut header_buf = [0; 20];

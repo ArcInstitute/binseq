@@ -17,7 +17,6 @@ bitnuc-deprec = { package ="bitnuc", version = "0.4.1" }
 bitnuc = { version = "0.5.1" }
 bytemuck = { version = "1.25.1", features = ["derive", "extern_crate_alloc"] }
 byteorder = "1.5.0"
-itoa = "1.0.18"
 memchr = "2.8.3"
 memmap2 = "0.9.11"
 num_cpus = "1.17.0"
