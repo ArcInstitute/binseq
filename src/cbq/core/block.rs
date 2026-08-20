@@ -1,3 +1,4 @@
+use core::fmt::NumBuffer;
 use std::io;
 
 use bytemuck::{cast_slice, cast_slice_mut};
@@ -731,7 +732,7 @@ impl ColumnarBlock {
             index: 0,
             is_paired: self.header.is_paired(),
             has_headers: self.header.has_headers(),
-            header_buffer: itoa::Buffer::new(),
+            header_buffer: NumBuffer::new(),
         }
     }
 }
@@ -756,8 +757,8 @@ pub struct RefRecordIter<'a> {
     /// Preallocated buffer for quality scores
     qbuf: &'a [u8],
 
-    /// Preallocated itoa buffer for converting global record index to string
-    header_buffer: itoa::Buffer,
+    /// Preallocated NumBuffer for converting global record index to string
+    header_buffer: NumBuffer<usize>,
 }
 impl<'a> Iterator for RefRecordIter<'a> {
     type Item = RefRecord<'a>;
@@ -830,9 +831,9 @@ struct RefRecordIndex {
     index_len: usize,
 }
 impl RefRecordIndex {
-    fn new(index: usize, itoa_buf: &mut itoa::Buffer) -> Self {
+    fn new(index: usize, buf: &mut NumBuffer<usize>) -> Self {
         let mut index_buf = [0u8; 20];
-        let header_str = itoa_buf.format(index);
+        let header_str = index.format_into(buf);
         let index_len = header_str.len();
         index_buf[..index_len].copy_from_slice(header_str.as_bytes());
         Self {
