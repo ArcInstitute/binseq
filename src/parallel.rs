@@ -4,7 +4,8 @@ use std::ops::Range;
 use std::path::Path;
 
 use crate::{
-    BinseqRecord, Result, bq, cbq,
+    BinseqRecord, Result, bq,
+    cbq::{self, DecompressionOptions},
     error::{FormatError, ReadError},
     vbq,
     write::Format,
@@ -66,6 +67,16 @@ impl BinseqReader {
             Self::Bq(reader) => reader.set_default_quality_score(score),
             Self::Vbq(reader) => reader.set_default_quality_score(score),
             Self::Cbq(reader) => reader.set_default_quality_score(score),
+        }
+    }
+
+    /// Set the decompression options for this reader
+    pub fn set_decompression_options(&mut self, options: DecompressionOptions) {
+        match self {
+            Self::Cbq(reader) => reader.set_decompression_options(options),
+            _ => {
+                // no-op
+            }
         }
     }
 

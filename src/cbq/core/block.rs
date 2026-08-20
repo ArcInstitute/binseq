@@ -7,6 +7,7 @@ use zstd::stream::copy_decode;
 use zstd::zstd_safe;
 
 use crate::cbq::core::utils::sized_compress;
+use crate::cbq::read::DecompressionOptions;
 use crate::error::{CbqError, WriteError};
 use crate::{BinseqRecord, BitSize, DEFAULT_QUALITY_SCORE, Result};
 
@@ -79,6 +80,9 @@ pub struct ColumnarBlock {
     qbuf: Vec<u8>,
     default_quality_score: u8,
 
+    /// Options for skipping decompression
+    decompression_opt: DecompressionOptions,
+
     /// The file header (used for block configuration)
     ///
     /// Not to be confused with the `BlockHeader`
@@ -99,6 +103,11 @@ impl ColumnarBlock {
     pub fn set_default_quality_score(&mut self, score: u8) {
         self.default_quality_score = score;
         self.qbuf.clear();
+    }
+
+    /// Set the decompression options for this block
+    pub fn set_decompression_options(&mut self, opt: DecompressionOptions) {
+        self.decompression_opt = opt;
     }
 
     fn is_empty(&self) -> bool {
@@ -620,7 +629,7 @@ impl ColumnarBlock {
         }
 
         // decompress npos
-        if header.len_z_npos > 0 {
+        if header.len_z_npos > 0 && !self.decompression_opt.get_skip_sequence() {
             resize_uninit(&mut self.ef_bytes, self.len_nef);
             dctx.decompress(
                 &mut self.ef_bytes,
@@ -632,10 +641,12 @@ impl ColumnarBlock {
             let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
             self.num_npos = ef.len();
             self.ef = Some(ef);
+        } else {
+            byte_offset += header.len_z_npos as usize;
         }
 
         // decompress sequence
-        {
+        if !self.decompression_opt.get_skip_sequence() {
             let ebuf_len = self.ebuf_len();
             resize_uninit(&mut self.ebuf, ebuf_len);
             dctx.decompress(
@@ -646,20 +657,24 @@ impl ColumnarBlock {
 
             bitnuc::decode_resize(&self.ebuf, self.nuclen, &mut self.seq)?;
             self.backfill_npos();
+        } else {
+            byte_offset += header.len_z_seq as usize;
         }
 
         // decompress flags
-        if header.len_z_flags > 0 {
+        if header.len_z_flags > 0 && !self.decompression_opt.get_skip_flags() {
             resize_uninit(&mut self.flags, self.num_records);
             dctx.decompress(
                 cast_slice_mut(&mut self.flags),
                 slice_and_increment(&mut byte_offset, header.len_z_flags, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+        } else {
+            byte_offset += header.len_z_flags as usize;
         }
 
         // decompress headers
-        if header.len_z_headers > 0 {
+        if header.len_z_headers > 0 && !self.decompression_opt.get_skip_header() {
             let headers_len = (self.l_header_offsets.last().copied().unwrap_or(0)
                 + self.l_headers.last().copied().unwrap_or(0))
                 as usize;
@@ -669,16 +684,22 @@ impl ColumnarBlock {
                 slice_and_increment(&mut byte_offset, header.len_z_headers, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+        } else {
+            byte_offset += header.len_z_headers as usize;
         }
 
         // decompress quality scores
-        if header.len_z_qual > 0 {
+        if header.len_z_qual > 0 && !self.decompression_opt.get_skip_quality() {
             resize_uninit(&mut self.qual, self.nuclen);
             dctx.decompress(
                 &mut self.qual,
                 slice_and_increment(&mut byte_offset, header.len_z_qual, bytes),
             )
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
+        } else {
+            // no need to increment byte_offset for end but included for consistency
+            //
+            // byte_offset += header.len_z_qual as usize;
         }
 
         Ok(())

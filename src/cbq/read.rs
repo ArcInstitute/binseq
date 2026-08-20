@@ -34,6 +34,11 @@ impl<R: io::Read> Reader<R> {
         self.block.set_default_quality_score(score);
     }
 
+    /// Set the decompression options for this reader
+    pub fn set_decompression_options(&mut self, options: DecompressionOptions) {
+        self.block.set_decompression_options(options);
+    }
+
     pub fn read_block(&mut self) -> Result<Option<BlockHeader>> {
         let mut iheader_buf = [0u8; size_of::<IndexHeader>()];
         let mut diff_buf = [0u8; size_of::<BlockHeader>() - size_of::<IndexHeader>()];
@@ -158,6 +163,11 @@ impl MmapReader {
     /// Update the default quality score for this reader
     pub fn set_default_quality_score(&mut self, score: u8) {
         self.block.set_default_quality_score(score);
+    }
+
+    /// Update the decompression options for this reader
+    pub fn set_decompression_options(&mut self, options: DecompressionOptions) {
+        self.block.set_decompression_options(options);
     }
 
     #[must_use]
@@ -330,6 +340,70 @@ impl ParallelReader for MmapReader {
         Ok(())
     }
 }
+
+/// Options for decompressing CBQ blocks
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DecompressionOptions {
+    /// Flags for skipping decompression
+    ///
+    /// Set specific bits to 1 to skip decompression for that field
+    ///
+    /// Bit 0 - skip sequence
+    /// Bit 1 - skip quality
+    /// Bit 2 - skip header
+    /// bit 3 - skip flags
+    flags: u8,
+}
+impl DecompressionOptions {
+    pub fn new(flags: u8) -> Self {
+        Self { flags }
+    }
+
+    fn set_skip_pos(&mut self, skip: bool, pos: u8) {
+        if skip {
+            self.flags |= 1 << pos;
+        } else {
+            self.flags &= !(1 << pos);
+        }
+    }
+
+    fn get_skip_pos(&self, pos: u8) -> bool {
+        (self.flags & (1 << pos)) != 0
+    }
+
+    pub fn set_skip_sequence(&mut self, skip: bool) {
+        self.set_skip_pos(skip, 0);
+    }
+
+    pub fn set_skip_quality(&mut self, skip: bool) {
+        self.set_skip_pos(skip, 1);
+    }
+
+    pub fn set_skip_header(&mut self, skip: bool) {
+        self.set_skip_pos(skip, 2);
+    }
+
+    pub fn set_skip_flags(&mut self, skip: bool) {
+        self.set_skip_pos(skip, 3);
+    }
+
+    pub fn get_skip_sequence(&self) -> bool {
+        self.get_skip_pos(0)
+    }
+
+    pub fn get_skip_quality(&self) -> bool {
+        self.get_skip_pos(1)
+    }
+
+    pub fn get_skip_header(&self) -> bool {
+        self.get_skip_pos(2)
+    }
+
+    pub fn get_skip_flags(&self) -> bool {
+        self.get_skip_pos(3)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;

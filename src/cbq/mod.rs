@@ -80,7 +80,7 @@ pub use core::{
     BlockHeader, BlockRange, ColumnarBlock, FileHeader, FileHeaderBuilder, Index, IndexFooter,
     IndexHeader, RefRecord, RefRecordIter,
 };
-pub use read::{MmapReader, Reader};
+pub use read::{DecompressionOptions, MmapReader, Reader};
 pub use write::ColumnarBlockWriter;
 
 /// The magic number for CBQ files.
