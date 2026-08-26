@@ -1,35 +1,35 @@
 //! # CBQ Format
 //!
-//! CBQ is a high-performance binary format built around blocked columnar storage.
-//! It optimizes for storage efficiency and parallel processing of records.
+//! CBQ is the recommended BINSEQ variant: a binary format built around blocked
+//! columnar storage, optimized for storage efficiency and parallel processing.
 //!
 //! ## Overview
 //!
-//! CBQ was built to solve the rough edges of VBQ.
-//! It keeps the blocked structure of VBQ, but instead of interleaving the internal data of all records in the block, it stores each attribute in a separate column.
-//! Each of these columns are then ZSTD compressed and optionally decoded when reading.
+//! Records are grouped into blocks; within each block every record attribute
+//! (lengths, sequences, quality scores, headers, flags) is stored as a separate
+//! column, and each column is ZSTD-compressed independently. Compared to the
+//! row-based VBQ this gives better compression ratios, faster reads
+//! (pay-per-use decompression), and simpler record parsing.
 //!
-//! It was built to be performant, efficient, and lossless by default.
+//! Sequences are two-bit encoded and lossless by default: the positions of
+//! ambiguous nucleotides (`N`) are tracked in an Elias-Fano encoded column and
+//! backfilled on decode.
 //!
-//! This has a few benefits and advantages over VBQ:
+//! ## Usage
 //!
-//! 1. Better compression ratios for each individual attribute.
-//! 2. Significantly faster throughput for reading (easier decompression + pay-per-use decompression).
-//! 3. Simple record parsing and manipulation.
-//!
-//! Notably this format *only* performs two-bit encoding of sequences.
-//! However, it tracks the positions of all ambiguous nucleotides (`N`) within the sequence.
-//! When it is decoded and the two-bit encoded sequence is decoded back to nucleotides, the `N` positions are backfilled with `N`.
-//!
-//! To make use of the sparse-but-clustered nature of the `N`-positions, we make use of an Elias-Fano encoding of the `N`-positions.
-//! This encoding is then used to efficiently store and retrieve the positions of `N`s within the sequence.
+//! Write CBQ files through [`BinseqWriterBuilder`](crate::BinseqWriterBuilder)
+//! (or [`ColumnarBlockWriter`](crate::cbq::ColumnarBlockWriter) directly), and read
+//! them with [`MmapReader`](crate::cbq::MmapReader) via the
+//! [`ParallelProcessor`](crate::ParallelProcessor) trait — see the crate-level example.
 //!
 //! ## File Structure
 //!
-//! A CBQ file consists of a [`FileHeader`](cbq::FileHeader), followed by record blocks and an embedded [`Index`](cbq::Index).
-//! Each record block is composed of a [`BlockHeader`](cbq::BlockHeader) which provides metadata about the block, and a [`ColumnarBlock`](cbq::ColumnarBlock) containing the actual data.
-//!
-//! The [`IndexHeader`](cbq::IndexHeader) and [`IndexFooter`](cbq::IndexFooter) are used to locate and access the data within the file when reading as memory mapped.
+//! A CBQ file consists of a [`FileHeader`](crate::cbq::FileHeader), followed by record
+//! blocks and an embedded [`Index`](crate::cbq::Index). Each record block is a
+//! [`BlockHeader`](crate::cbq::BlockHeader) with block metadata followed by a
+//! [`ColumnarBlock`](crate::cbq::ColumnarBlock) of data. The
+//! [`IndexHeader`](crate::cbq::IndexHeader) and [`IndexFooter`](crate::cbq::IndexFooter)
+//! locate the index for memory-mapped reading.
 //!
 //! ```text
 //! ┌───────────────────┐
@@ -53,16 +53,15 @@
 //!
 //! ## Block Format
 //!
-//! The blocks on-disk are stored as ZSTD compressed data.
-//! Each column is ZSTD compressed and stored contiguously next to each other.
-//!
-//! The [BlockHeader](cbq::BlockHeader) contains the compressed sizes of each of the columns as well as the relevant information for their uncompressed sizes.
+//! Each column is ZSTD-compressed and stored contiguously; the
+//! [`BlockHeader`](crate::cbq::BlockHeader) records the compressed and
+//! uncompressed sizes of every column.
 //!
 //! ```text
 //! [BlockHeader][col1][col2][col3]...[BlockHeader][col1][col2][col3]...
 //! ```
 //!
-//! The order of columns in the block is as follows:
+//! Column order:
 //!
 //! 1. `z_seq_len` - sequence lengths
 //! 2. `z_header_len` - header lengths (optional)

@@ -1,160 +1,62 @@
-//! # bq
+//! # BQ Format
 //!
-//! *.bq files are BINSEQ variants for **fixed-length** records and **does not support quality scores**.
-//!
-//! For variable-length records and optional quality scores use the [`cbq`](crate::cbq) or [`vbq`](crate::vbq) modules.
-//!
-//! This module contains the utilities for reading, writing, and interacting with BQ files.
+//! BQ (`*.bq`) is the BINSEQ variant for **fixed-length** records without
+//! quality scores. Its uniform record size gives constant-time random access
+//! with minimal overhead. For variable-length records and optional quality
+//! scores use [`cbq`](crate::cbq).
 //!
 //! For detailed information on the file format, see our [paper](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v1).
 //!
 //! ## Usage
 //!
 //! ### Reading
+//!
 //! ```rust
 //! use binseq::{bq, BinseqRecord};
-//! use rand::{thread_rng, Rng};
 //!
-//! let path = "./data/subset.bq";
-//! let reader = bq::MmapReader::new(path).unwrap();
-//!
-//! // We can easily determine the number of records in the file
+//! let reader = bq::MmapReader::new("./data/subset.bq").unwrap();
 //! let num_records = reader.num_records();
 //!
-//! // We have random access to any record within the range
-//! let random_index = thread_rng().gen_range(0..num_records);
-//! let record = reader.get(random_index).unwrap();
+//! // Random access to any record in the file
+//! let record = reader.get(num_records / 2).unwrap();
 //!
-//! // We can easily decode the (2bit)encoded sequence back to a sequence of bytes
+//! // Decode the 2-bit encoded sequence back to bytes
 //! let mut sbuf = Vec::new();
-//! let mut xbuf = Vec::new();
-//!
-//! record.decode_s(&mut sbuf);
-//! if record.is_paired() {
-//!     record.decode_x(&mut xbuf);
-//! }
+//! record.decode_s(&mut sbuf).unwrap();
 //! ```
 //!
 //! ### Writing
 //!
-//! #### Writing unpaired sequences
-//!
 //! ```rust
 //! use binseq::{bq, SequencingRecordBuilder};
 //! use std::io::Cursor;
 //!
-//! // Create an in-memory buffer for output
-//! let output_handle = Cursor::new(Vec::new());
-//!
-//! // Initialize our BQ header (64 bp, only primary)
+//! // BQ is fixed-length: sequence lengths are set in the header
 //! let header = bq::FileHeaderBuilder::new().slen(64).build().unwrap();
-//!
-//! // Initialize our BQ writer
 //! let mut writer = bq::WriterBuilder::default()
 //!     .header(header)
-//!     .build(output_handle)
+//!     .build(Cursor::new(Vec::new()))
 //!     .unwrap();
 //!
-//! // Generate a random sequence
 //! let seq = [b'A'; 64];
-//!
-//! // Build a record and write it to the file
 //! let record = SequencingRecordBuilder::default()
 //!     .s_seq(&seq)
-//!     .flag(0)
 //!     .build()
 //!     .unwrap();
 //! writer.push(record).unwrap();
-//!
-//! // Flush the writer
 //! writer.flush().unwrap();
 //! ```
 //!
-//! #### Writing paired sequences
+//! Paired records work the same way: set `xlen` on the header and `x_seq` on
+//! the record. For streaming over arbitrary readers/writers (e.g. network
+//! sockets) see [`StreamReader`](crate::bq::StreamReader) and the
+//! `network_streaming` example.
 //!
-//! ```rust
-//! use binseq::{bq, SequencingRecordBuilder};
-//! use std::io::Cursor;
+//! ## File Format
 //!
-//! // Create an in-memory buffer for output
-//! let output_handle = Cursor::new(Vec::new());
+//! A BQ file is a fixed-size header followed by densely packed records.
 //!
-//! // Initialize our BQ header (64 bp and 128bp)
-//! let header = bq::FileHeaderBuilder::new().slen(64).xlen(128).build().unwrap();
-//!
-//! // Initialize our BQ writer
-//! let mut writer = bq::WriterBuilder::default()
-//!     .header(header)
-//!     .build(output_handle)
-//!     .unwrap();
-//!
-//! // Generate paired sequences
-//! let primary = [b'A'; 64];
-//! let secondary = [b'C'; 128];
-//!
-//! // Build a paired record and write it to the file
-//! let record = SequencingRecordBuilder::default()
-//!     .s_seq(&primary)
-//!     .x_seq(&secondary)
-//!     .flag(0)
-//!     .build()
-//!     .unwrap();
-//! writer.push(record).unwrap();
-//!
-//! // Flush the writer
-//! writer.flush().unwrap();
-//! ```
-//!
-//! # Example: Streaming Access
-//!
-//! ```
-//! use binseq::{Policy, Result, BinseqRecord, SequencingRecordBuilder};
-//! use binseq::bq::{FileHeaderBuilder, StreamReader, WriterBuilder};
-//! use std::io::{BufReader, BufWriter, Cursor};
-//!
-//! fn main() -> Result<()> {
-//!     // Create a header for sequences of length 100
-//!     let header = FileHeaderBuilder::new().slen(100).build()?;
-//!
-//!     // Create a buffered writer over any `Write` destination
-//!     let mut writer = WriterBuilder::default()
-//!         .header(header)
-//!         .build(BufWriter::new(Cursor::new(Vec::new())))?;
-//!
-//!     // Write sequences
-//!     let sequence = b"ACGT".repeat(25); // 100 nucleotides
-//!     let record = SequencingRecordBuilder::default()
-//!         .s_seq(&sequence)
-//!         .flag(0)
-//!         .build()?;
-//!     writer.push(record)?;
-//!
-//!     // Get the inner buffer
-//!     let buffer = writer.into_inner().into_inner().map_err(std::io::Error::from)?;
-//!     let data = buffer.into_inner();
-//!
-//!     // Create a stream reader
-//!     let mut reader = StreamReader::new(BufReader::new(Cursor::new(data)));
-//!
-//!     // Process records as they arrive
-//!     while let Some(record) = reader.next_record() {
-//!         // Process each record
-//!         let record = record?;
-//!         let flag = record.flag();
-//!     }
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## BQ file format
-//!
-//! A BQ file consists of two sections:
-//!
-//! 1. Fixed-size header (32 bytes)
-//! 2. Record data section
-//!
-//! ### Header Format (32 bytes total)
+//! ### Header (32 bytes)
 //!
 //! | Offset | Size (bytes) | Name     | Description                  | Type   |
 //! | ------ | ------------ | -------- | ---------------------------- | ------ |
@@ -164,77 +66,19 @@
 //! | 9      | 4            | xlen     | Sequence length (secondary)  | uint32 |
 //! | 13     | 19           | reserved | Reserved for future use      | bytes  |
 //!
-//! ### Record Format
+//! ### Records
 //!
-//! Each record consists of a:
+//! Each record is a flag field (8 bytes, uint64, implementation-defined) followed
+//! by the encoded sequence data (`ceil(N/32) * 8` bytes for sequence length `N`).
+//! The leading flag enables filtering without touching sequence data, and the
+//! uniform record size makes random access a constant-time offset calculation.
 //!
-//! 1. Flag field (8 bytes, uint64)
-//! 2. Sequence data (ceil(N/32) \* 8 bytes, where N is sequence length)
+//! ### Encoding
 //!
-//! The flag field is implementation-defined and can be used for filtering, metadata, or other purposes. The placement of the flag field at the start of each record enables efficient filtering without reading sequence data.
-//!
-//! Total record size = 8 + (ceil(N/32) \* 8) bytes, where N is sequence length
-//!
-//! ## Encoding
-//!
-//! - Each nucleotide is encoded using 2 bits:
-//!   - A = 00
-//!   - C = 01
-//!   - G = 10
-//!   - T = 11
-//! - Non-ATCG characters are **unsupported**.
-//! - Sequences are stored in Little-Endian order
-//! - The final u64 of sequence data is padded with zeros if the sequence length is not divisible by 32
-//!
-//! See [`bitnuc`] for 2bit implementation details.
-//!
-//! ## bq implementation Notes
-//!
-//! - Sequences are stored in u64 chunks, each holding up to 32 bases
-//! - Random access to any record can be calculated as:
-//!   - record_size = 8 + (ceil(sequence_length/32) \* 8)
-//!   - record_start = 16 + (record_index \* record_size)
-//! - Total number of records can be calculated as: (file_size - 16) / record_size
-//! - Flag field placement allows for efficient filtering strategies:
-//!   - Records can be skipped based on flag values without reading sequence data
-//!   - Flag checks can be vectorized for parallel processing
-//!   - Memory access patterns are predictable for better cache utilization
-//!
-//! ## Example Storage Requirements
-//!
-//! Common sequence lengths:
-//!
-//! - 32bp reads:
-//!   - Sequence: 1 \* 8 = 8 bytes (fits in one u64)
-//!   - Flag: 8 bytes
-//!   - Total per record: 16 bytes
-//! - 100bp reads:
-//!   - Sequence: 4 \* 8 = 32 bytes (requires four u64s)
-//!   - Flag: 8 bytes
-//!   - Total per record: 40 bytes
-//! - 150bp reads:
-//!   - Sequence: 5 \* 8 = 40 bytes (requires five u64s)
-//!   - Flag: 8 bytes
-//!   - Total per record: 48 bytes
-//!
-//! ## Validation
-//!
-//! Implementations should verify:
-//!
-//! 1. Correct magic number
-//! 2. Compatible version number
-//! 3. Sequence length is greater than 0
-//! 4. File size minus header (32 bytes) is divisible by the record size
-//!
-//! ## Future Considerations
-//!
-//! - The 19 reserved bytes in the header allow for future format extensions
-//! - The 64-bit flag field provides space for implementation-specific features such as:
-//!   - Quality score summaries
-//!   - Filtering flags
-//!   - Read group identifiers
-//!   - Processing state
-//!   - Count data
+//! Nucleotides are 2-bit encoded (A=00, C=01, G=10, T=11) into little-endian
+//! u64 words of 32 bases each, zero-padded in the final word. Non-ACGT characters
+//! are unsupported; see [`Policy`](crate::Policy) for handling options and
+//! [`bitnuc`] for implementation details.
 
 mod header;
 mod reader;

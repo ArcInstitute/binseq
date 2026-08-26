@@ -1,36 +1,13 @@
-//! # VBQ Index Format
+//! Embedded index for VBQ files (v0.7.0+).
 //!
-//! This module implements the embedded index format for VBQ files.
-//!
-//! ## Format Changes (v0.7.0+)
-//!
-//! **BREAKING CHANGE**: The VBQ index is now embedded at the end of VBQ files,
-//! improving portability and eliminating the need to manage auxiliary files.
-//!
-//! ## Embedded Index Structure
-//!
-//! The index is located at the end of the VBQ file with this layout:
+//! The index sits at the end of the file:
 //!
 //! ```text
 //! [VBQ Data Blocks][Compressed Index][Index Size (u64)][INDEX_END_MAGIC (u64)]
 //! ```
 //!
-//! Where:
-//! - **Compressed Index**: ZSTD-compressed index data (`IndexHeader` + `BlockRanges`)
-//! - **Index Size**: 8 bytes indicating size of compressed index data
-//! - **`INDEX_END_MAGIC`**: 8 bytes (`0x444E455845444E49` = "INDEXEND")
-//!
-//! ## Index Contents
-//!
-//! The compressed index contains:
-//! 1. **`IndexHeader`** (32 bytes): Metadata about the indexed file
-//! 2. **`BlockRange` entries** (32 bytes each): One per data block
-//!
-//! ## Key Changes from v0.6.x
-//!
-//! - Index is now embedded in VBQ files
-//! - Cumulative record counts changed from `u32` to `u64`
-//! - Support for files with more than 4 billion records
+//! The compressed section is ZSTD-compressed and holds an `IndexHeader`
+//! (32 bytes) followed by one 32-byte `BlockRange` per data block.
 
 use std::io::{Cursor, Read, Write};
 
@@ -52,97 +29,28 @@ pub const INDEX_END_MAGIC: u64 = 0x444E455845444E49;
 /// Index Block Reservation
 pub const INDEX_RESERVATION: [u8; 4] = [42; 4];
 
-/// Descriptor of the dimensions of a block in a VBQ file
+/// Position, size, and record counts of a single block; 32 bytes serialized.
 ///
-/// A `BlockRange` contains metadata about a single block within a VBQ file,
-/// including its position, size, and record count. This information enables
-/// efficient random access to blocks without scanning the entire file.
-///
-/// Block ranges are stored in a `BlockIndex` to form a complete index of a VBQ file.
-/// Each range is serialized to a fixed-size 32-byte structure when stored in the embedded index.
-///
-/// ## Format Changes (v0.7.0+)
-///
-/// - `cumulative_records` field changed from `u32` to `u64`
-/// - Supports files with more than 4 billion records
-/// - Reserved bytes reduced from 8 to 4 bytes
-///
-/// # Examples
-///
-/// ```rust
-/// use binseq::vbq::BlockRange;
-///
-/// // Create a new block range
-/// let range = BlockRange::new(
-///     1024,                  // Starting offset in the file (bytes)
-///     8192,                  // Length of the block (bytes)
-///     1000,                  // Number of records in this block
-///     5000                   // Cumulative number of records up to this block (now u64)
-/// );
-///
-/// // Use the range information
-/// println!("Block starts at byte {}", range.start_offset);
-/// println!("Block contains {} records", range.block_records);
-/// ```
+/// Stored in a `BlockIndex` to enable random access without scanning the file.
 #[derive(Debug, Clone, Copy)]
 pub struct BlockRange {
-    /// File offset where the block starts (in bytes, including headers)
-    ///
-    /// This is the absolute byte position in the file where this block begins,
-    /// including the file header and block header.
-    ///
-    /// (8 bytes in serialized form)
+    /// Absolute file offset where the block (header included) starts (8 bytes)
     pub start_offset: u64,
 
-    /// Length of the block data in bytes
-    ///
-    /// This is the size of the block data, not including the block header.
-    /// For compressed blocks, this is the compressed size.
-    ///
-    /// (8 bytes in serialized form)
+    /// Block data length in bytes, excluding the block header; compressed size if compressed (8 bytes)
     pub len: u64,
 
-    /// Number of records contained in this block
-    ///
-    /// (4 bytes in serialized form)
+    /// Number of records in this block (4 bytes)
     pub block_records: u32,
 
-    /// Cumulative number of records up to this block
-    ///
-    /// This allows efficient determination of which block contains a specific record
-    /// by index without scanning through all previous blocks.
-    ///
-    /// **BREAKING CHANGE (v0.7.0+)**: Changed from u32 to u64 to support files
-    /// with more than 4 billion records.
-    ///
-    /// (8 bytes in serialized form)
+    /// Cumulative number of records before this block (8 bytes)
     pub cumulative_records: u64,
 
-    /// Reserved bytes for future extensions
+    /// Reserved bytes for future extensions (4 bytes)
     pub reservation: [u8; 4],
 }
 impl BlockRange {
-    /// Creates a new `BlockRange` with the specified parameters
-    ///
-    /// # Parameters
-    ///
-    /// * `start_offset` - The byte offset in the file where this block starts
-    /// * `len` - The length of the block data in bytes
-    /// * `block_records` - The number of records contained in this block
-    /// * `cumulative_records` - The total number of records up to and including this block
-    ///
-    /// # Returns
-    ///
-    /// A new `BlockRange` instance with the specified parameters
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use binseq::vbq::BlockRange;
-    ///
-    /// // Create a new block range for a block starting at byte 1024
-    /// let range = BlockRange::new(1024, 8192, 1000, 5000);
-    /// ```
+    /// Creates a new `BlockRange`.
     #[must_use]
     pub fn new(start_offset: u64, len: u64, block_records: u32, cumulative_records: u64) -> Self {
         Self {
@@ -154,24 +62,7 @@ impl BlockRange {
         }
     }
 
-    /// Serializes the block range to a binary format and writes it to the provided writer
-    ///
-    /// This method serializes the `BlockRange` to a fixed-size 32-byte structure and
-    /// writes it to the provided writer. The serialized format is:
-    /// - Bytes 0-7: `start_offset` (u64, little endian)
-    /// - Bytes 8-15: len (u64, little endian)
-    /// - Bytes 16-19: `block_records` (u32, little endian)
-    /// - Bytes 20-23: `cumulative_records` (u32, little endian)
-    /// - Bytes 24-31: reservation (8 bytes)
-    ///
-    /// # Parameters
-    ///
-    /// * `writer` - The destination to write the serialized block range to
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the block range was successfully written
-    /// * `Err(_)` - If an error occurred during writing
+    /// Serializes the block range as 32 bytes (little-endian fields) to a writer.
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buf = [0; SIZE_BLOCK_RANGE];
         buf[0..8].copy_from_slice(&self.start_offset.to_le_bytes());
@@ -183,16 +74,7 @@ impl BlockRange {
         Ok(())
     }
 
-    /// Deserializes a `BlockRange` from a slice of bytes
-    ///
-    /// # Format
-    ///
-    /// The buffer is expected to contain:
-    /// - Bytes 0-7: `start_offset` (u64, little endian)
-    /// - Bytes 8-15: len (u64, little endian)
-    /// - Bytes 16-19: `block_records` (u32, little endian)
-    /// - Bytes 20-27: `cumulative_records` (u64, little endian)
-    /// - Bytes 28-31: reservation (ignored, default value used)
+    /// Deserializes a `BlockRange` from bytes (layout mirrors `write_bytes`).
     ///
     /// # Panics
     ///
@@ -209,55 +91,19 @@ impl BlockRange {
     }
 }
 
-/// Header for a VBQ index file
-///
-/// The `IndexHeader` contains metadata about an index file, including a magic number
-/// for validation and the size of the indexed file. This allows verifying that an index
-/// file matches its corresponding VBQ file.
-///
-/// The header has a fixed size of 32 bytes to ensure compatibility across versions.
+/// 32-byte header of the embedded index: `INDEX_MAGIC` (8 bytes),
+/// indexed file size (8 bytes), and 16 reserved bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct IndexHeader {
     /// Total size of the indexed VBQ file in bytes
-    ///
-    /// The serialized form also carries the `INDEX_MAGIC` magic number (8 bytes)
-    /// and 16 reserved bytes.
     bytes: u64,
 }
 impl IndexHeader {
-    /// Creates a new index header for a VBQ file of the specified size
-    ///
-    /// # Parameters
-    ///
-    /// * `bytes` - The total size of the VBQ file being indexed, in bytes
-    ///
-    /// # Returns
-    ///
-    /// A new `IndexHeader` instance with the appropriate magic number and size
+    /// Creates an index header for a VBQ file of the given size in bytes.
     pub fn new(bytes: u64) -> Self {
         Self { bytes }
     }
-    /// Reads an index header from the provided reader
-    ///
-    /// This method reads 32 bytes from the provided reader and deserializes them
-    /// into an `IndexHeader`. It validates the magic number to ensure that the file
-    /// is indeed a VBQ index file.
-    ///
-    /// # Parameters
-    ///
-    /// * `reader` - The source from which to read the header
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Self)` - If the header was successfully read and has a valid magic number
-    /// * `Err(_)` - If an error occurred during reading or the magic number is invalid
-    ///
-    /// # Format
-    ///
-    /// The header is expected to be 32 bytes with the following structure:
-    /// - Bytes 0-7: magic number (u64, little endian, must be `INDEX_MAGIC`)
-    /// - Bytes 8-15: file size in bytes (u64, little endian)
-    /// - Bytes 16-31: reserved for future extensions
+    /// Parses an index header from bytes, validating the magic number.
     pub fn from_bytes(buffer: &[u8]) -> Result<Self> {
         let magic = read_u64_le(&buffer[0..8]);
         if magic != INDEX_MAGIC {
@@ -268,26 +114,7 @@ impl IndexHeader {
         })
     }
 
-    /// Serializes the index header to a binary format and writes it to the provided writer
-    ///
-    /// This method serializes the `IndexHeader` to a fixed-size 32-byte structure and
-    /// writes it to the provided writer. This is typically used when saving an index to a file.
-    ///
-    /// # Parameters
-    ///
-    /// * `writer` - The destination to write the serialized header to
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the header was successfully written
-    /// * `Err(_)` - If an error occurred during writing
-    ///
-    /// # Format
-    ///
-    /// The header is serialized as:
-    /// - Bytes 0-7: magic number (u64, little endian)
-    /// - Bytes 8-15: file size in bytes (u64, little endian)
-    /// - Bytes 16-31: reserved for future extensions
+    /// Serializes the index header as 32 bytes to a writer.
     pub fn write_bytes<W: Write>(self, writer: &mut W) -> Result<()> {
         let mut buffer = [42; INDEX_HEADER_SIZE];
         buffer[0..8].copy_from_slice(&INDEX_MAGIC.to_le_bytes());
@@ -297,16 +124,10 @@ impl IndexHeader {
     }
 }
 
-/// Complete index for a VBQ file
+/// Complete embedded index of a VBQ file: an `IndexHeader` plus one
+/// `BlockRange` per block.
 ///
-/// A `BlockIndex` contains metadata about a VBQ file and all of its blocks,
-/// enabling efficient random access and parallel processing. It consists of an
-/// `IndexHeader` and a collection of `BlockRange` entries, one for each block in
-/// the file.
-///
-/// The index is embedded at the end of VBQ files and can be loaded using
-/// `MmapReader::load_index()`. Once loaded, it provides information about block
-/// locations, sizes, and record counts.
+/// Loaded from the end of a VBQ file with `MmapReader::load_index()`.
 ///
 /// # Examples
 ///
@@ -314,7 +135,6 @@ impl IndexHeader {
 /// use binseq::vbq::MmapReader;
 /// use std::path::Path;
 ///
-/// // Load the embedded index from a VBQ file
 /// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
 /// let index = reader.load_index().unwrap();
 /// println!("File contains {} blocks", index.n_blocks());
@@ -324,19 +144,11 @@ pub struct BlockIndex {
     /// Header containing metadata about the indexed file
     pub(crate) header: IndexHeader,
 
-    /// Collection of block ranges, one for each block in the file
+    /// Block ranges, one per block in the file
     pub(crate) ranges: Vec<BlockRange>,
 }
 impl BlockIndex {
-    /// Creates a new empty block index with the specified header
-    ///
-    /// # Parameters
-    ///
-    /// * `header` - The index header containing metadata about the indexed file
-    ///
-    /// # Returns
-    ///
-    /// A new empty `BlockIndex` instance
+    /// Creates a new empty block index with the given header.
     #[must_use]
     pub fn new(header: IndexHeader) -> Self {
         Self {
@@ -344,22 +156,7 @@ impl BlockIndex {
             ranges: Vec::default(),
         }
     }
-    /// Returns the number of blocks in the indexed file
-    ///
-    /// # Returns
-    ///
-    /// The number of blocks in the VBQ file described by this index
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{BlockIndex, MmapReader};
-    /// use std::path::Path;
-    ///
-    /// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
-    /// let index = reader.load_index().unwrap();
-    /// println!("The file contains {} blocks", index.n_blocks());
-    /// ```
+    /// Returns the number of blocks in the indexed file.
     #[must_use]
     pub fn n_blocks(&self) -> usize {
         self.ranges.len()
@@ -374,20 +171,7 @@ impl BlockIndex {
         Ok(())
     }
 
-    /// Write the collection of `BlockRange` to an output handle
-    /// Writes all block ranges to the provided writer
-    ///
-    /// This method is used internally to write the block ranges to the embedded index.
-    /// It can also be used to serialize an index to any destination that implements `Write`.
-    ///
-    /// # Parameters
-    ///
-    /// * `writer` - The destination to write the block ranges to
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all block ranges were successfully written
-    /// * `Err(_)` - If an error occurred during writing
+    /// Writes all non-empty block ranges to a writer.
     pub fn write_range<W: Write>(&self, writer: &mut W) -> Result<()> {
         self.ranges
             .iter()
@@ -395,14 +179,7 @@ impl BlockIndex {
             .try_for_each(|range| -> Result<()> { range.write_bytes(writer) })
     }
 
-    /// Adds a block range to the index
-    ///
-    /// This method is used internally during index creation to add information
-    /// about each block in the file. Blocks are typically added in order.
-    ///
-    /// # Parameters
-    ///
-    /// * `range` - The block range to add to the index
+    /// Adds a block range to the index.
     fn add_range(&mut self, range: BlockRange) {
         self.ranges.push(range);
     }
@@ -428,31 +205,7 @@ impl BlockIndex {
         Ok(ranges)
     }
 
-    /// Get a reference to the internal ranges
-    /// Returns a reference to the collection of block ranges
-    ///
-    /// This provides access to the metadata for all blocks in the indexed file,
-    /// which can be used for operations like parallel processing or random access.
-    ///
-    /// # Returns
-    ///
-    /// A slice containing all `BlockRange` entries in this index
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    /// use std::path::Path;
-    ///
-    /// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
-    /// let index = reader.load_index().unwrap();
-    ///
-    /// // Examine the ranges to determine which blocks to process
-    /// for (i, range) in index.ranges().iter().enumerate() {
-    ///     println!("Block {}: {} records at offset {}",
-    ///              i, range.block_records, range.start_offset);
-    /// }
-    /// ```
+    /// Returns the block ranges in this index.
     #[must_use]
     pub fn ranges(&self) -> &[BlockRange] {
         &self.ranges

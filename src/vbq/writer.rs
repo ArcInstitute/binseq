@@ -1,66 +1,13 @@
-//! Writer implementation for VBQ files
+//! Writer implementation for VBQ files.
 //!
-//! This module provides functionality for writing sequence data to VBQ files,
-//! including support for compression, quality scores, paired-end reads, and sequence headers.
-//!
-//! The VBQ writer implements a block-based approach where records are packed
-//! into fixed-size blocks. Each block has a header containing metadata about the
-//! records it contains. Blocks may be optionally compressed using zstd compression.
-//!
-//! ## Format Changes (v0.7.0+)
-//!
-//! - **Embedded Index**: Writers now automatically embed an index at the end of the file
-//! - **Headers Support**: Optional sequence headers/identifiers can be written with each record
-//! - **Multi-bit Encoding**: Support for 2-bit and 4-bit nucleotide encodings
-//! - **Extended Capacity**: u64 indexing supports more than 4 billion records
-//!
-//! ## File Structure Written
+//! Records are packed into fixed-size blocks, optionally zstd-compressed,
+//! producing:
 //!
 //! ```text
 //! [File Header][Data Blocks][Compressed Index][Index Size][Index End Magic]
 //! ```
 //!
-//! The writer automatically:
-//! 1. Writes the file header
-//! 2. Writes data blocks as records are added
-//! 3. Builds an index during writing
-//! 4. On `finish()`, compresses and embeds the index at the end of the file
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use binseq::vbq::{WriterBuilder, FileHeaderBuilder};
-//! use binseq::SequencingRecordBuilder;
-//! use std::fs::File;
-//!
-//! // Create a VBQ file writer with headers and compression
-//! let file = File::create("example.vbq").unwrap();
-//! let header = FileHeaderBuilder::new()
-//!     .block(128 * 1024)
-//!     .qual(true)
-//!     .compressed(true)
-//!     .headers(true)
-//!     .flags(true)
-//!     .build();
-//!
-//! let mut writer = WriterBuilder::default()
-//!     .header(header)
-//!     .build(file)
-//!     .unwrap();
-//!
-//! // Write a nucleotide sequence with quality scores and header
-//! let record = SequencingRecordBuilder::default()
-//!     .s_seq(b"ACGTACGTACGT")
-//!     .s_qual(b"IIIIIIIIIIII")
-//!     .s_header(b"sequence_001")
-//!     .flag(0)
-//!     .build()
-//!     .unwrap();
-//! writer.push(record).unwrap();
-//!
-//! // Must call finish() to write the embedded index
-//! writer.finish().unwrap();
-//! ```
+//! Call `finish()` when done so the embedded index is written.
 
 use std::io::Write;
 
@@ -75,33 +22,7 @@ use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
 use crate::vbq::index::{INDEX_END_MAGIC, IndexHeader};
 use crate::vbq::{BlockIndex, BlockRange};
 
-/// A builder for creating configured `Writer` instances
-///
-/// This builder provides a fluent interface for configuring and creating a
-/// `Writer` with customized settings. It allows specifying the file header,
-/// encoding policy, and whether to operate in headless mode.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use binseq::vbq::{WriterBuilder, FileHeaderBuilder};
-/// use binseq::Policy;
-/// use std::fs::File;
-///
-/// // Create a writer with custom settings
-/// let file = File::create("example.vbq").unwrap();
-/// let mut writer = WriterBuilder::default()
-///     .header(FileHeaderBuilder::new()
-///         .block(65536)
-///         .qual(true)
-///         .compressed(true)
-///         .build())
-///     .policy(Policy::IgnoreSequence)
-///     .build(file)
-///     .unwrap();
-///
-/// // Use the writer...
-/// ```
+/// Builder for configured [`Writer`] instances.
 #[derive(Default)]
 pub struct WriterBuilder {
     /// Header of the file
@@ -112,122 +33,29 @@ pub struct WriterBuilder {
     headless: Option<bool>,
 }
 impl WriterBuilder {
-    /// Sets the header for the VBQ file
-    ///
-    /// The header defines the file format parameters such as block size, whether
-    /// the file contains quality scores, paired-end reads, and compression settings.
-    ///
-    /// # Parameters
-    ///
-    /// * `header` - The `FileHeader` to use for the file
-    ///
-    /// # Returns
-    ///
-    /// The builder with the header configured
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{WriterBuilder, FileHeaderBuilder};
-    ///
-    /// // Create a header with 64KB blocks and quality scores
-    /// let header = FileHeaderBuilder::new()
-    ///     .block(65536)
-    ///     .qual(true)
-    ///     .paired(true)
-    ///     .compressed(true)
-    ///     .build();
-    ///
-    /// let builder = WriterBuilder::default().header(header);
-    /// ```
+    /// Sets the file header (block size, quality, pairing, compression, etc.).
     #[must_use]
     pub fn header(mut self, header: FileHeader) -> Self {
         self.header = Some(header);
         self
     }
 
-    /// Sets the encoding policy for nucleotide sequences
-    ///
-    /// The policy determines how sequences are encoded into the binary format.
-    /// Different policies offer trade-offs between compression ratio and compatibility
-    /// with different types of sequence data.
-    ///
-    /// # Parameters
-    ///
-    /// * `policy` - The encoding policy to use
-    ///
-    /// # Returns
-    ///
-    /// The builder with the encoding policy configured
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{WriterBuilder};
-    /// use binseq::Policy;
-    ///
-    /// let builder = WriterBuilder::default().policy(Policy::IgnoreSequence);
-    /// ```
+    /// Sets the encoding policy for invalid nucleotides.
     #[must_use]
     pub fn policy(mut self, policy: Policy) -> Self {
         self.policy = Some(policy);
         self
     }
 
-    /// Sets whether to operate in headless mode
-    ///
-    /// In headless mode, the writer does not write a file header. This is useful
-    /// when creating part of a file that will be merged with other parts later,
-    /// such as in parallel writing scenarios.
-    ///
-    /// # Parameters
-    ///
-    /// * `headless` - Whether to operate in headless mode
-    ///
-    /// # Returns
-    ///
-    /// The builder with the headless mode configured
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::WriterBuilder;
-    ///
-    /// // Create a headless writer for parallel writing
-    /// let builder = WriterBuilder::default().headless(true);
-    /// ```
+    /// Sets headless mode: skips writing the file header, for parts that
+    /// will be merged into another file later (e.g. parallel writing).
     #[must_use]
     pub fn headless(mut self, headless: bool) -> Self {
         self.headless = Some(headless);
         self
     }
 
-    /// Builds a `Writer` with the configured settings
-    ///
-    /// This finalizes the builder and creates a new `Writer` instance using
-    /// the provided writer and the configured settings. If any settings were not
-    /// explicitly set, default values will be used.
-    ///
-    /// # Parameters
-    ///
-    /// * `inner` - The underlying writer where data will be written
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Writer)` - A configured `Writer` ready for use
-    /// * `Err(_)` - If an error occurred while initializing the writer
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::WriterBuilder;
-    /// use std::fs::File;
-    ///
-    /// let file = File::create("example.vbq").unwrap();
-    /// let mut writer = WriterBuilder::default()
-    ///     .build(file)
-    ///     .unwrap();
-    /// ```
+    /// Builds a `Writer` around `inner`, using defaults for unset options.
     pub fn build<W: Write>(self, inner: W) -> Result<Writer<W>> {
         Writer::new(
             inner,
@@ -238,54 +66,11 @@ impl WriterBuilder {
     }
 }
 
-/// Writer for VBQ format files
+/// Block-based writer for VBQ files.
 ///
-/// The `Writer` handles writing nucleotide sequence data to VBQ files in a
-/// block-based format. It manages the file structure, compression settings, and ensures
-/// data is properly encoded and organized.
-///
-/// ## File Structure
-///
-/// A VBQ file consists of:
-/// 1. A file header that defines parameters like block size and compression settings
-/// 2. A series of blocks, each with:
-///    - A block header with metadata (e.g., record count)
-///    - A collection of encoded records
-///
-/// Each block is filled with records until either the block is full or no more complete
-/// records can fit. The writer automatically handles block boundaries and creates new
-/// blocks as needed.
-///
-/// ## Usage
-///
-/// The writer supports multiple formats:
-/// - Single-end sequences with or without quality scores
-/// - Paired-end sequences with or without quality scores
-///
-/// It's recommended to use the `WriterBuilder` to create and configure a writer
-/// instance with the appropriate settings.
-///
-/// ```rust,no_run
-/// use binseq::vbq::{WriterBuilder, FileHeader};
-/// use binseq::SequencingRecordBuilder;
-/// use std::fs::File;
-///
-/// // Create a writer for single-end reads
-/// let file = File::create("example.vbq").unwrap();
-/// let mut writer = WriterBuilder::default()
-///     .header(FileHeader::default())
-///     .build(file)
-///     .unwrap();
-///
-/// // Write a sequence
-/// let record = SequencingRecordBuilder::default()
-///     .s_seq(b"ACGTACGTACGT")
-///     .build()
-///     .unwrap();
-/// writer.push(record).unwrap();
-///
-/// // Writer automatically flushes when dropped
-/// ```
+/// Fills fixed-size blocks with encoded records, starting a new block when a
+/// record would overflow the current one. Create via [`WriterBuilder`]; call
+/// [`Writer::finish`] (also invoked on drop) to flush and embed the index.
 #[derive(Clone)]
 pub struct Writer<W: Write> {
     /// Inner Writer
@@ -336,49 +121,14 @@ impl<W: Write> Writer<W> {
         Ok(wtr)
     }
 
-    /// Initializes the writer by writing the file header
-    ///
-    /// This method is called automatically during creation unless headless mode is enabled.
-    /// It writes the `FileHeader` to the underlying writer.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the header was successfully written
-    /// * `Err(_)` - If an error occurred during writing
+    /// Writes the file header; called on creation unless headless.
     fn init(&mut self) -> Result<()> {
         self.header.write_bytes(&mut self.inner)?;
         self.bytes_written += SIZE_HEADER;
         Ok(())
     }
 
-    /// Checks if the writer is configured for paired-end reads
-    ///
-    /// This method returns whether the writer expects paired-end reads based on the
-    /// header settings. If true, you should use `write_paired_nucleotides` instead of
-    /// `write_nucleotides` to write sequences.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the writer is configured for paired-end reads, `false` otherwise
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{WriterBuilder, FileHeader};
-    /// use std::fs::File;
-    ///
-    /// // Create a header for paired-end reads
-    /// let mut header = FileHeader::default();
-    /// header.paired = true;
-    ///
-    /// let file = File::create("paired_reads.vbq").unwrap();
-    /// let writer = WriterBuilder::default()
-    ///     .header(header)
-    ///     .build(file)
-    ///     .unwrap();
-    ///
-    /// assert!(writer.is_paired());
-    /// ```
+    /// Returns whether the writer is configured for paired-end reads.
     pub fn is_paired(&self) -> bool {
         self.header.paired
     }
@@ -393,35 +143,7 @@ impl<W: Write> Writer<W> {
         self.encoder.policy()
     }
 
-    /// Checks if the writer is configured for quality scores
-    ///
-    /// This method returns whether the writer expects quality scores based on the
-    /// header settings. If true, you should use methods that include quality scores
-    /// (`write_nucleotides_with_quality` or `write_paired_nucleotides_with_quality`)
-    /// to write sequences.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the writer is configured for quality scores, `false` otherwise
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{WriterBuilder, FileHeader};
-    /// use std::fs::File;
-    ///
-    /// // Create a header for sequences with quality scores
-    /// let mut header = FileHeader::default();
-    /// header.qual = true;
-    ///
-    /// let file = File::create("reads_with_quality.vbq").unwrap();
-    /// let writer = WriterBuilder::default()
-    ///     .header(header)
-    ///     .build(file)
-    ///     .unwrap();
-    ///
-    /// assert!(writer.has_quality());
-    /// ```
+    /// Returns whether the writer is configured for quality scores.
     pub fn has_quality(&self) -> bool {
         self.header.qual
     }
@@ -464,21 +186,10 @@ impl<W: Write> Writer<W> {
         )
     }
 
-    /// Writes a record using the unified [`SequencingRecord`] API
+    /// Writes a [`SequencingRecord`], the unified API shared with the BQ and CBQ writers.
     ///
-    /// This method provides a consistent interface with BQ and CBQ writers.
-    /// It automatically routes to the single or paired write path based on
-    /// whether the record contains paired data.
-    ///
-    /// # Arguments
-    ///
-    /// * `record` - A [`SequencingRecord`] containing the sequence data to write
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(true)` if the record was written successfully
-    /// * `Ok(false)` if the record was skipped due to invalid nucleotides
-    /// * `Err(_)` if writing failed
+    /// Returns `Ok(false)` if the record was skipped by the encoding policy
+    /// (e.g. invalid nucleotides).
     ///
     /// # Examples
     ///
@@ -487,11 +198,7 @@ impl<W: Write> Writer<W> {
     /// use binseq::SequencingRecordBuilder;
     /// use std::fs::File;
     ///
-    /// let header = FileHeaderBuilder::new()
-    ///     .qual(true)
-    ///     .headers(true)
-    ///     .build();
-    ///
+    /// let header = FileHeaderBuilder::new().qual(true).headers(true).build();
     /// let mut writer = WriterBuilder::default()
     ///     .header(header)
     ///     .build(File::create("example.vbq").unwrap())
@@ -578,42 +285,10 @@ impl<W: Write> Writer<W> {
         Ok(true)
     }
 
-    /// Finishes writing and flushes all data to the underlying writer
+    /// Flushes remaining data and writes the embedded index.
     ///
-    /// This method should be called when you're done writing to ensure all data
-    /// is properly flushed to the underlying writer. It's automatically called
-    /// when the writer is dropped, but calling it explicitly allows you to handle
-    /// any errors that might occur during flushing.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all data was successfully flushed
-    /// * `Err(_)` - If an error occurred during flushing
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{WriterBuilder, FileHeader};
-    /// use binseq::SequencingRecordBuilder;
-    /// use std::fs::File;
-    ///
-    /// let file = File::create("example.vbq").unwrap();
-    /// let mut writer = WriterBuilder::default()
-    ///     .build(file)
-    ///     .unwrap();
-    ///
-    /// // Write some sequences...
-    /// let record = SequencingRecordBuilder::default()
-    ///     .s_seq(b"ACGTACGTACGT")
-    ///     .build()
-    ///     .unwrap();
-    /// writer.push(record).unwrap();
-    ///
-    /// // Manually finish and check for errors
-    /// if let Err(e) = writer.finish() {
-    ///     eprintln!("Error flushing data: {}", e);
-    /// }
-    /// ```
+    /// Called automatically on drop, but calling it explicitly lets you handle
+    /// errors. Idempotent: the index is only written once.
     pub fn finish(&mut self) -> Result<()> {
         // Flush any remaining data in the current block
         self.flush_block()?;
@@ -638,57 +313,11 @@ impl<W: Write> Writer<W> {
         &mut self.cblock
     }
 
-    /// Ingests data from another `Writer` that uses a `Vec<u8>` as its inner writer
+    /// Transfers all blocks (complete and partial) from an in-memory writer
+    /// into this one, clearing the other for reuse. Used to combine per-thread
+    /// buffers in parallel writing.
     ///
-    /// This method is particularly useful for parallel processing, where multiple writers
-    /// might be writing to memory buffers and need to be combined into a single file. It
-    /// transfers all complete blocks and any partial blocks from the other writer into this one.
-    ///
-    /// The method clears the other writer's buffer after ingestion, allowing it to be reused.
-    ///
-    /// # Parameters
-    ///
-    /// * `other` - Another `Writer` whose inner writer is a `Vec<u8>`
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If ingestion was successful
-    /// * `Err(_)` - If an error occurred during ingestion or if the headers are incompatible
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The headers of the two writers are not compatible (`WriteError::IncompatibleHeaders`)
-    /// - An I/O error occurred during data transfer
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{WriterBuilder, FileHeader};
-    /// use binseq::SequencingRecordBuilder;
-    /// use std::fs::File;
-    ///
-    /// // Create a file writer
-    /// let file = File::create("combined.vbq").unwrap();
-    /// let mut file_writer = WriterBuilder::default()
-    ///     .build(file)
-    ///     .unwrap();
-    ///
-    /// // Create a memory writer
-    /// let mut mem_writer = WriterBuilder::default()
-    ///     .build(Vec::new())
-    ///     .unwrap();
-    ///
-    /// // Write some data to the memory writer
-    /// let record = SequencingRecordBuilder::default()
-    ///     .s_seq(b"ACGTACGT")
-    ///     .build()
-    ///     .unwrap();
-    /// mem_writer.push(record).unwrap();
-    ///
-    /// // Ingest data from memory writer into file writer
-    /// file_writer.ingest(&mut mem_writer).unwrap();
-    /// ```
+    /// Errors if the two writers' headers are incompatible.
     pub fn ingest(&mut self, other: &mut Writer<Vec<u8>>) -> Result<()> {
         if self.header != other.header {
             return Err(WriteError::IncompatibleHeaders(self.header, other.header).into());

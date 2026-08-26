@@ -4,12 +4,8 @@ use crate::Result;
 
 /// Record trait shared between BINSEQ variants.
 ///
-/// Exposes public methods for accessing internal data.
-/// Interfaces with the [`bitnuc`] crate for decoding sequences.
-///
-/// Implemented by [`bq::RefRecord`](crate::bq::RefRecord) and [`vbq::RefRecord`](crate::vbq::RefRecord).
-///
-/// Used to interact with [`ParallelProcessor`](crate::ParallelProcessor) for easy parallel processing.
+/// Implemented by the `RefRecord` type of each variant and consumed by
+/// [`ParallelProcessor`](crate::ParallelProcessor) for parallel processing.
 pub trait BinseqRecord {
     /// Returns the bitsize of the record (number of bits per nucleotide)
     fn bitsize(&self) -> BitSize;
@@ -68,46 +64,44 @@ pub trait BinseqRecord {
         Ok(())
     }
 
-    /// Returns a reference to the primary decoded sequence of this record.
+    /// Returns the decoded primary sequence.
     ///
-    /// This is not available on all types that implement the `Record` trait.
-    /// It should be available on types that implement it in this library however.
+    /// # Panics
+    ///
+    /// The default implementation panics; all record types in this library override it.
     fn sseq(&self) -> &[u8] {
         unimplemented!("This record does not implement direct sequence access");
     }
 
-    /// Returns a reference to the extended decoded sequence of this record.
+    /// Returns the decoded extended sequence.
     ///
-    /// This may not be available on all types that implement the `Record` trait.
-    /// It should be available on types that implement it in this library however.
+    /// # Panics
+    ///
+    /// The default implementation panics; all record types in this library override it.
     fn xseq(&self) -> &[u8] {
         unimplemented!("This record does not implement direct sequence access");
     }
 
-    /// Decodes the primary sequence of this record into a newly allocated buffer.
-    ///
-    /// Not advised to use this function as it allocates a new buffer every time.
+    /// Decodes the primary sequence into a newly allocated buffer (prefer [`decode_s`](Self::decode_s)).
     fn decode_s_alloc(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::with_capacity(self.slen() as usize);
         self.decode_s(&mut buf)?;
         Ok(buf)
     }
 
-    /// Decodes the extended sequence of this record into a newly allocated buffer.
-    ///
-    /// Not advised to use this function as it allocates a new buffer every time.
+    /// Decodes the extended sequence into a newly allocated buffer (prefer [`decode_x`](Self::decode_x)).
     fn decode_x_alloc(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::with_capacity(self.xlen() as usize);
         self.decode_x(&mut buf)?;
         Ok(buf)
     }
 
-    /// A convenience function to check if the record is paired.
+    /// Returns true if the record is paired.
     fn is_paired(&self) -> bool {
         self.xlen() > 0
     }
 
-    /// A convenience function to check if record has associated quality scores
+    /// Returns true if the record has associated quality scores.
     fn has_quality(&self) -> bool {
         !self.squal().is_empty()
     }

@@ -1,16 +1,7 @@
-//! # File and Block Header Definitions
+//! VBQ file and block header definitions.
 //!
-//! This module defines the header structures used in the VBQ file format.
-//!
-//! The VBQ format consists of two primary header types:
-//!
-//! 1. `FileHeader` - The file header that appears at the beginning of a VBQ file,
-//!    containing information about the overall file format and configuration.
-//!
-//! 2. `BlockHeader` - Headers that appear before each block of records, containing
-//!    information specific to that block like its size and number of records.
-//!
-//! Both headers are fixed-size and include magic numbers to validate file integrity.
+//! `FileHeader` opens the file; a `BlockHeader` precedes each record block.
+//! Both are fixed-size (32 bytes) and carry magic numbers for validation.
 
 use std::io::{Read, Write};
 
@@ -21,52 +12,30 @@ use crate::{
     utils::{read_u32_le, read_u64_le},
 };
 
-/// Magic number for file identification: "VSEQ" in ASCII (0x51455356)
-///
-/// This constant is used in the file header to identify VBQ formatted files.
-#[allow(clippy::unreadable_literal)]
-const MAGIC: u32 = 0x51455356;
+/// Magic bytes at the start of a VBQ file on disk
+pub const FILE_MAGIC: [u8; 4] = *b"VSEQ";
+const MAGIC: u32 = u32::from_le_bytes(FILE_MAGIC);
 
-/// The magic bytes as they appear at the start of a VBQ file on disk.
-///
-/// Used to identify VBQ files by content rather than by file extension.
-pub const FILE_MAGIC: [u8; 4] = MAGIC.to_le_bytes();
-
-/// Magic number for block identification: "BLOCKSEQ" in ASCII (0x5145534B434F4C42)
-///
-/// This constant is used in block headers to validate block integrity.
+/// Block magic number: "BLOCKSEQ" in ASCII (0x5145534B434F4C42)
 #[allow(clippy::unreadable_literal)]
 const BLOCK_MAGIC: u64 = 0x5145534B434F4C42;
 
 /// Current format version number
-///
-/// This should be incremented when making backwards-incompatible changes to the format.
 const FORMAT: u8 = 1;
 
-/// Size of the file header in bytes (32 bytes)
-///
-/// The file header has a fixed size to simplify parsing.
+/// Size of the file header in bytes
 pub const SIZE_HEADER: usize = 32;
 
-/// Size of the block header in bytes (32 bytes)
-///
-/// Each block header has a fixed size to simplify block navigation.
+/// Size of each block header in bytes
 pub const SIZE_BLOCK_HEADER: usize = 32;
 
-/// Default block size in bytes: 128KB
-///
-/// This defines the default virtual size of each record block.
-/// A larger block size can improve compression ratio but reduces random access granularity.
+/// Default virtual block size in bytes (128KB)
 pub const BLOCK_SIZE: u64 = 128 * 1024;
 
-/// Reserved bytes for future use in the file header
-///
-/// These bytes are set to a placeholder value (42) and reserved for future extensions.
+/// Reserved bytes in the file header (placeholder value 42)
 pub const RESERVED_BYTES: [u8; 13] = [42; 13];
 
-/// Reserved bytes for future use in block headers (12 bytes)
-///
-/// These bytes are set to a placeholder value (42) and reserved for future extensions.
+/// Reserved bytes in block headers (placeholder value 42)
 pub const RESERVED_BYTES_BLOCK: [u8; 12] = [42; 12];
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -134,88 +103,41 @@ impl FileHeaderBuilder {
     }
 }
 
-/// File header for VBQ files
-///
-/// This structure represents the 32-byte header that appears at the beginning of every
-/// VBQ file. It contains configuration information about the file format, including
-/// whether quality scores are included, whether blocks are compressed, and whether
-/// records contain paired sequences.
-///
-/// # Fields
-///
-/// * `magic` - Magic number to validate file format ("VSEQ", 4 bytes)
-/// * `format` - Version number of the file format (1 byte)
-/// * `block` - Size of each block in bytes (8 bytes)
-/// * `qual` - Whether quality scores are included (1 byte boolean)
-/// * `compressed` - Whether blocks are ZSTD compressed (1 byte boolean)
-/// * `paired` - Whether records contain paired sequences (1 byte boolean)
-/// * `reserved` - Reserved bytes for future extensions (16 bytes)
+/// 32-byte header at the start of every VBQ file.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FileHeader {
-    /// Magic number to identify the file format ("VSEQ")
-    ///
-    /// Always set to 0x51455356 (4 bytes)
+    /// Magic number "VSEQ" (4 bytes)
     pub magic: u32,
 
-    /// Version of the file format
-    ///
-    /// Currently set to 1 (1 byte)
+    /// Format version (1 byte)
     pub format: u8,
 
-    /// Block size in bytes
-    ///
-    /// This is the virtual (uncompressed) size of each record block (8 bytes)
+    /// Virtual (uncompressed) block size in bytes (8 bytes)
     pub block: u64,
 
-    /// Whether quality scores are included with sequences
-    ///
-    /// If true, quality scores are stored for each nucleotide (1 byte)
+    /// Whether quality scores are included (1 byte)
     pub qual: bool,
 
-    /// Whether internal blocks are compressed with ZSTD
-    ///
-    /// If true, blocks are compressed individually (1 byte)
+    /// Whether blocks are ZSTD compressed (1 byte)
     pub compressed: bool,
 
-    /// Whether records contain paired sequences
-    ///
-    /// If true, each record has both primary and extended sequences (1 byte)
+    /// Whether records contain paired sequences (1 byte)
     pub paired: bool,
 
-    /// The bitsize of the sequence data (1 byte)
-    ///
-    /// Specifies the number of bits per nucleotide:
-    /// - 2-bit: Standard encoding (A=00, C=01, G=10, T=11)
-    /// - 4-bit: Extended encoding supporting ambiguous nucleotides
+    /// Bits per nucleotide: 2-bit standard or 4-bit ambiguous (1 byte)
     pub bits: BitSize,
 
-    /// Whether sequence headers are included with sequences (1 byte)
-    ///
-    /// When true, each record includes length-prefixed UTF-8 header strings
-    /// for both primary and extended (paired) sequences
+    /// Whether length-prefixed sequence headers are included (1 byte)
     pub headers: bool,
 
-    /// Whether flags are included with sequences (1 byte)
-    ///
-    /// When true, each record includes length-prefixed UTF-8 flag strings
-    /// for both primary and extended (paired) sequences
+    /// Whether per-record flags are included (1 byte)
     pub flags: bool,
 
-    /// Reserved bytes for future format extensions
-    ///
-    /// Currently filled with placeholder values (13 bytes)
+    /// Reserved bytes for future extensions (13 bytes)
     pub reserved: [u8; 13],
 }
 impl Default for FileHeader {
-    /// Creates a default header with default block size and all features disabled
-    ///
-    /// The default header:
-    /// - Uses the default block size (128KB)
-    /// - Does not include quality scores
-    /// - Does not use compression
-    /// - Does not support paired sequences
-    /// - Does not include sequence headers
-    /// - Uses 2-bit nucleotide encoding
+    /// Default block size (128KB), 2-bit encoding, all features disabled.
     fn default() -> Self {
         Self {
             magic: MAGIC,
@@ -232,24 +154,7 @@ impl Default for FileHeader {
     }
 }
 impl FileHeader {
-    /// Creates a header from a 32-byte buffer
-    ///
-    /// This function parses a raw byte buffer into a `FileHeader` structure,
-    /// validating the magic number and format version.
-    ///
-    /// # Parameters
-    ///
-    /// * `buffer` - A 32-byte array containing the header data
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Self>` - A valid header if parsing was successful
-    ///
-    /// # Errors
-    ///
-    /// * `HeaderError::InvalidMagicNumber` - If the magic number doesn't match "VSEQ"
-    /// * `HeaderError::InvalidFormatVersion` - If the format version is unsupported
-    /// * `HeaderError::InvalidReservedBytes` - If the reserved bytes section is invalid
+    /// Parses a header from a 32-byte buffer, validating magic and version.
     pub fn from_bytes(buffer: &[u8; SIZE_HEADER]) -> Result<Self> {
         let magic = read_u32_le(&buffer[0..4]);
         if magic != MAGIC {
@@ -290,22 +195,7 @@ impl FileHeader {
         })
     }
 
-    /// Writes the header to a writer
-    ///
-    /// This function serializes the header structure into a 32-byte buffer and writes
-    /// it to the provided writer.
-    ///
-    /// # Parameters
-    ///
-    /// * `writer` - Any type that implements the `Write` trait
-    ///
-    /// # Returns
-    ///
-    /// * `Result<()>` - Success if the header was written
-    ///
-    /// # Errors
-    ///
-    /// * IO errors if writing to the writer fails
+    /// Serializes the header as 32 bytes to a writer.
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_HEADER];
         buffer[0..4].copy_from_slice(&self.magic.to_le_bytes());
@@ -322,23 +212,7 @@ impl FileHeader {
         Ok(())
     }
 
-    /// Reads a header from a reader
-    ///
-    /// This function reads 32 bytes from the provided reader and parses them into
-    /// a `FileHeader` structure.
-    ///
-    /// # Parameters
-    ///
-    /// * `reader` - Any type that implements the `Read` trait
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Self>` - A valid header if reading and parsing was successful
-    ///
-    /// # Errors
-    ///
-    /// * IO errors if reading from the reader fails
-    /// * Header validation errors from `from_bytes()`
+    /// Reads and parses a 32-byte header from a reader.
     pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self> {
         let mut buffer = [0u8; SIZE_HEADER];
         reader.read_exact(&mut buffer)?;
@@ -351,56 +225,23 @@ impl FileHeader {
     }
 }
 
-/// Block header for VBQ block data
-///
-/// Each block in a VBQ file is preceded by a 32-byte block header that contains
-/// information about the block including its size and the number of records it contains.
-///
-/// # Fields
-///
-/// * `magic` - Magic number to validate block integrity ("BLOCKSEQ", 8 bytes)
-/// * `size` - Actual size of the block in bytes (8 bytes)
-/// * `records` - Number of records in the block (4 bytes)
-/// * `reserved` - Reserved bytes for future extensions (12 bytes)
+/// 32-byte header preceding each block in a VBQ file.
 #[derive(Clone, Copy, Debug)]
 pub struct BlockHeader {
-    /// Magic number to identify the block ("BLOCKSEQ")
-    ///
-    /// Always set to 0x5145534B434F4C42 (8 bytes)
+    /// Magic number "BLOCKSEQ" (8 bytes)
     pub magic: u64,
 
-    /// Actual size of the block in bytes
-    ///
-    /// This can differ from the virtual block size in the file header
-    /// when compression is enabled (8 bytes)
+    /// Actual on-disk block size in bytes; differs from the virtual size when compressed (8 bytes)
     pub size: u64,
 
-    /// Number of records stored in this block
-    ///
-    /// Used to iterate through records efficiently (4 bytes)
+    /// Number of records in this block (4 bytes)
     pub records: u32,
 
-    /// Reserved bytes for future extensions
-    ///
-    /// Currently filled with placeholder values (12 bytes)
+    /// Reserved bytes for future extensions (12 bytes)
     pub reserved: [u8; 12],
 }
 impl BlockHeader {
-    /// Creates a new block header
-    ///
-    /// # Parameters
-    ///
-    /// * `size` - The actual size of the block in bytes (can be compressed size)
-    /// * `records` - The number of records contained in the block
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use binseq::vbq::BlockHeader;
-    ///
-    /// // Create a block header for a block with 1024 bytes and 100 records
-    /// let header = BlockHeader::new(1024, 100);
-    /// ```
+    /// Creates a new block header with the given on-disk size and record count.
     #[must_use]
     pub fn new(size: u64, records: u32) -> Self {
         Self {
@@ -426,22 +267,7 @@ impl BlockHeader {
         self.size == 0 && self.records == 0
     }
 
-    /// Writes the block header to a writer
-    ///
-    /// This function serializes the block header structure into a 32-byte buffer and writes
-    /// it to the provided writer.
-    ///
-    /// # Parameters
-    ///
-    /// * `writer` - Any type that implements the `Write` trait
-    ///
-    /// # Returns
-    ///
-    /// * `Result<()>` - Success if the header was written
-    ///
-    /// # Errors
-    ///
-    /// * IO errors if writing to the writer fails
+    /// Serializes the block header as 32 bytes to a writer.
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_BLOCK_HEADER];
         buffer[0..8].copy_from_slice(&self.magic.to_le_bytes());
@@ -452,22 +278,7 @@ impl BlockHeader {
         Ok(())
     }
 
-    /// Creates a block header from a 32-byte buffer
-    ///
-    /// This function parses a raw byte buffer into a `BlockHeader` structure,
-    /// validating the magic number.
-    ///
-    /// # Parameters
-    ///
-    /// * `buffer` - A 32-byte array containing the block header data
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Self>` - A valid block header if parsing was successful
-    ///
-    /// # Errors
-    ///
-    /// * `ReadError::InvalidBlockMagicNumber` - If the magic number doesn't match "BLOCKSEQ"
+    /// Parses a block header from a 32-byte buffer, validating the magic number.
     pub fn from_bytes(buffer: &[u8; SIZE_BLOCK_HEADER]) -> Result<Self> {
         let magic = read_u64_le(&buffer[0..8]);
         if magic != BLOCK_MAGIC {

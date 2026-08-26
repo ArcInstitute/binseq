@@ -1,8 +1,4 @@
-//! Header module for the binseq library
-//!
-//! This module provides the header structure and functionality for binary sequence files.
-//! The header contains metadata about the binary sequence data, including format version,
-//! sequence length, and other information necessary for proper interpretation of the data.
+//! Fixed-size file header for BQ files.
 
 use bitnuc_deprec::BitSize;
 use std::io::{Read, Write};
@@ -12,30 +8,17 @@ use crate::{
     utils::read_u32_le,
 };
 
-/// Current magic number: "BSEQ" in ASCII (in little-endian byte order)
-///
-/// This is used to identify binary sequence files and verify file integrity.
-#[allow(clippy::unreadable_literal)]
-const MAGIC: u32 = 0x51455342;
+/// The magic bytes at the start of a BQ file on disk.
+pub const FILE_MAGIC: [u8; 4] = *b"BSEQ";
+const MAGIC: u32 = u32::from_le_bytes(FILE_MAGIC);
 
-/// The magic bytes as they appear at the start of a BQ file on disk.
-///
-/// Used to identify BQ files by content rather than by file extension.
-pub const FILE_MAGIC: [u8; 4] = MAGIC.to_le_bytes();
-
-/// Current format version of the binary sequence file format
-///
-/// This version number allows for future format changes while maintaining backward compatibility.
+/// Current format version
 const FORMAT: u8 = 1;
 
 /// Size of the header in bytes
-///
-/// The header has a fixed size to ensure consistent reading and writing of binary sequence files.
 pub const SIZE_HEADER: usize = 32;
 
-/// Reserved bytes in the header
-///
-/// These bytes are reserved for future use and should be set to a consistent value.
+/// Reserved bytes in the header (future use)
 pub const RESERVED: [u8; 17] = [42; 17];
 
 #[derive(Debug, Clone, Copy)]
@@ -98,48 +81,28 @@ impl FileHeaderBuilder {
     }
 }
 
-/// Header structure for binary sequence files
-///
-/// The `FileHeader` contains metadata about the binary sequence data stored in a file,
-/// including format information, sequence lengths, and space for future extensions.
-///
-/// The total size of this structure is 32 bytes, with a fixed layout to ensure
-/// consistent reading and writing across different platforms.
+/// Fixed 32-byte header for BQ files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileHeader {
-    /// Magic number to identify the file format
-    ///
-    /// 4 bytes
+    /// Magic number identifying the file format (4 bytes)
     pub magic: u32,
 
-    /// Version of the file format
-    ///
-    /// 1 byte
+    /// Format version (1 byte)
     pub format: u8,
 
-    /// Length of all sequences in the file
-    ///
-    /// 4 bytes
+    /// Primary sequence length (4 bytes)
     pub slen: u32,
 
-    /// Length of secondary sequences in the file
-    ///
-    /// 4 bytes
+    /// Secondary sequence length (4 bytes)
     pub xlen: u32,
 
-    /// Number of bits per nucleotide (currently 2 or 4)
-    ///
-    /// 1 byte
+    /// Bits per nucleotide, 2 or 4 (1 byte)
     pub bits: BitSize,
 
-    /// All records have a flag attribute
-    ///
-    /// 1 byte
+    /// Whether all records carry a flag attribute (1 byte)
     pub flags: bool,
 
-    /// Reserve remaining bytes for future use
-    ///
-    /// 17 bytes
+    /// Reserved for future use (17 bytes)
     pub reserved: [u8; 17],
 }
 impl FileHeader {
@@ -149,26 +112,7 @@ impl FileHeader {
         self.xlen > 0
     }
 
-    /// Parses a header from a fixed-size byte array
-    ///
-    /// This method validates the magic number and format version before constructing
-    /// a header instance. If validation fails, appropriate errors are returned.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` - A byte array of exactly `SIZE_HEADER` bytes containing the header data
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(FileHeader)` - A valid header parsed from the buffer
-    /// * `Err(Error)` - If the buffer contains invalid header data
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The magic number is incorrect
-    /// * The format version is unsupported
-    /// * The reserved bytes are invalid
+    /// Parses and validates a header from a fixed-size byte array
     pub fn from_bytes(buffer: &[u8; SIZE_HEADER]) -> Result<Self> {
         let magic = read_u32_le(&buffer[0..4]);
         if magic != MAGIC {
@@ -200,26 +144,7 @@ impl FileHeader {
         })
     }
 
-    /// Parses a header from an arbitrarily sized buffer
-    ///
-    /// This method extracts the header from the beginning of a buffer that may be larger
-    /// than the header size. It checks that the buffer is at least as large as the header
-    /// before attempting to parse it.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` - A byte slice containing at least `SIZE_HEADER` bytes
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(FileHeader)` - A valid header parsed from the buffer
-    /// * `Err(Error)` - If the buffer is too small or contains invalid header data
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The buffer is smaller than `SIZE_HEADER`
-    /// * The header data is invalid (see `from_bytes` for validation details)
+    /// Parses a header from the first `SIZE_HEADER` bytes of a buffer
     pub fn from_buffer(buffer: &[u8]) -> Result<Self> {
         let mut bytes = [0u8; SIZE_HEADER];
         if buffer.len() < SIZE_HEADER {
@@ -229,23 +154,7 @@ impl FileHeader {
         Self::from_bytes(&bytes)
     }
 
-    /// Writes the header to a writer
-    ///
-    /// This method serializes the header to its binary representation and writes it
-    /// to the provided writer.
-    ///
-    /// # Arguments
-    ///
-    /// * `writer` - Any type that implements the `Write` trait
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the header was successfully written
-    /// * `Err(Error)` - If writing to the writer failed
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if writing to the writer fails (typically an I/O error).
+    /// Serializes the header and writes it to a writer
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_HEADER];
         buffer[0..4].copy_from_slice(&self.magic.to_le_bytes());
@@ -259,25 +168,7 @@ impl FileHeader {
         Ok(())
     }
 
-    /// Reads a header from a reader
-    ///
-    /// This method reads exactly `SIZE_HEADER` bytes from the provided reader and
-    /// parses them into a header structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `reader` - Any type that implements the `Read` trait
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(FileHeader)` - A valid header read from the reader
-    /// * `Err(Error)` - If reading from the reader failed or the header data is invalid
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * Reading from the reader fails (typically an I/O error)
-    /// * The header data is invalid (see `from_bytes` for validation details)
+    /// Reads and parses a header from a reader
     pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self> {
         let mut buffer = [0u8; SIZE_HEADER];
         reader.read_exact(&mut buffer)?;

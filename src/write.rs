@@ -1,7 +1,7 @@
 //! Unified writer interface for BINSEQ formats
 //!
-//! This module provides a unified `BinseqWriter` enum that abstracts over the three
-//! BINSEQ format writers (BQ, VBQ, CBQ), allowing format-agnostic writing of sequence data.
+//! [`BinseqWriter`] abstracts over the three format writers (CBQ, BQ, VBQ),
+//! allowing format-agnostic writing of sequence data.
 //!
 //! # Example
 //!
@@ -9,8 +9,8 @@
 //! use binseq::{write::{BinseqWriter, BinseqWriterBuilder, Format}, SequencingRecordBuilder};
 //! use std::io::Cursor;
 //!
-//! // Create a VBQ writer with quality scores and headers
-//! let mut writer = BinseqWriterBuilder::new(Format::Vbq)
+//! // Create a CBQ writer with quality scores and headers
+//! let mut writer = BinseqWriterBuilder::new(Format::Cbq)
 //!     .paired(false)
 //!     .quality(true)
 //!     .headers(true)
@@ -31,7 +31,7 @@
 //!
 //! # Parallel Writing
 //!
-//! For parallel writing scenarios, use `headless(true)` for thread-local writers
+//! For parallel writing, use `headless(true)` for thread-local writers
 //! and `ingest()` to merge them into a global writer:
 //!
 //! ```rust,no_run
@@ -39,9 +39,9 @@
 //! use std::fs::File;
 //!
 //! // Global writer (writes header)
-//! let mut global = BinseqWriterBuilder::new(Format::Vbq)
+//! let mut global = BinseqWriterBuilder::new(Format::Cbq)
 //!     .paired(false)
-//!     .build(File::create("output.vbq").unwrap())
+//!     .build(File::create("output.cbq").unwrap())
 //!     .unwrap();
 //!
 //! // Thread-local writer (headless, Vec<u8> buffer)
@@ -305,15 +305,9 @@ impl BinseqWriterBuilder {
 
     /// Encode FASTX file(s) to BINSEQ format
     ///
-    /// This method returns a [`FastxEncoderBuilder`](crate::utils::FastxEncoderBuilder) that allows you to configure
-    /// the input source and threading options before executing the encoding.
-    ///
-    /// This is an alternative to [`build`](Self::build) that directly processes
-    /// FASTX files using parallel processing.
-    ///
-    /// # Availability
-    ///
-    /// This method is only available when the `paraseq` feature is enabled.
+    /// Returns a [`FastxEncoderBuilder`](crate::utils::FastxEncoderBuilder) for configuring
+    /// the input source and threading before running the (parallel) encoding.
+    /// Requires the `paraseq` feature.
     ///
     /// # Example
     ///
@@ -349,11 +343,7 @@ impl BinseqWriterBuilder {
 
     /// Build the writer
     ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Format is BQ and `slen` is not set
-    /// - Format is BQ, `paired` is true, but `xlen` is not set
+    /// Errors for BQ if `slen` (or `xlen` when paired) is not set.
     pub fn build<W: Write>(self, writer: W) -> Result<BinseqWriter<W>> {
         match self.format {
             Format::Bq => self.build_bq(writer),
@@ -451,8 +441,7 @@ impl BinseqWriterBuilder {
 
 /// Unified writer for BINSEQ formats
 ///
-/// This enum wraps the three format-specific writers (BQ, VBQ, CBQ) and provides
-/// a unified interface for writing sequence data.
+/// Wraps the three format-specific writers behind one interface.
 // `cbq::ColumnarBlockWriter` is intrinsically larger than the other variants (it holds a
 // reusable `ColumnarBlock` encode buffer). Boxing it would shrink this enum but is a breaking
 // change to the variant's public field type, so it's left as-is rather than churn downstream
@@ -470,14 +459,9 @@ pub enum BinseqWriter<W: Write> {
 impl<W: Write> BinseqWriter<W> {
     /// Push a record to the writer
     ///
-    /// Returns `Ok(true)` if the record was written successfully, or `Ok(false)`
-    /// if the record was skipped due to invalid nucleotides (based on the configured
-    /// policy). CBQ always returns `Ok(true)` as it handles N's explicitly.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there's an I/O error or if the record doesn't match
-    /// the writer's configuration (e.g., paired record to unpaired writer).
+    /// Returns `Ok(false)` if the record was skipped due to invalid nucleotides
+    /// (per the configured [`Policy`]). CBQ stores `N`s natively and always
+    /// returns `Ok(true)`.
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
         match self {
             Self::Bq(w) => w.push(record),
@@ -488,12 +472,7 @@ impl<W: Write> BinseqWriter<W> {
 
     /// Finish writing and flush any remaining data
     ///
-    /// For VBQ and CBQ formats, this writes the embedded index. For BQ, this
-    /// is equivalent to `flush()`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there's an I/O error writing the final data.
+    /// For CBQ and VBQ this writes the embedded index; for BQ it is equivalent to `flush()`.
     pub fn finish(&mut self) -> Result<()> {
         match self {
             Self::Bq(w) => w.flush(),
@@ -560,15 +539,8 @@ impl<W: Write + Clone> Clone for BinseqWriter<W> {
 impl<W: Write> BinseqWriter<W> {
     /// Ingest records from a headless `Vec<u8>` writer into this writer
     ///
-    /// This is used in parallel writing scenarios where thread-local writers
-    /// buffer to `Vec<u8>` and then get merged into a global writer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The source and destination writers have different formats
-    /// - The source and destination writers have incompatible headers
-    /// - There's an I/O error during ingestion
+    /// Used in parallel writing to merge thread-local buffers into a global writer.
+    /// Errors if the writers have incompatible formats or headers.
     pub fn ingest(&mut self, other: &mut BinseqWriter<Vec<u8>>) -> Result<()> {
         match (self, other) {
             (Self::Bq(dst), BinseqWriter::Bq(src)) => dst.ingest(src),
@@ -578,19 +550,11 @@ impl<W: Write> BinseqWriter<W> {
         }
     }
 
-    /// Ingest *completed* records from a headless `Vec<u8>` writer into this writer
+    /// Ingest only *completed* blocks from a headless `Vec<u8>` writer
     ///
-    /// This is used in parallel writing scenarios where thread-local writers
-    /// buffer to `Vec<u8>` and then get merged into a global writer.
-    ///
-    /// Currently only different for CBQ
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The source and destination writers have different formats
-    /// - The source and destination writers have incompatible headers
-    /// - There's an I/O error during ingestion
+    /// Like [`ingest`](Self::ingest), but for CBQ it drains only already-compressed
+    /// blocks, leaving the in-progress block accumulating on the worker thread.
+    /// Identical to `ingest` for the other formats.
     pub fn ingest_completed(&mut self, other: &mut BinseqWriter<Vec<u8>>) -> Result<()> {
         match (self, other) {
             (Self::Cbq(dst), BinseqWriter::Cbq(src)) => dst.ingest_completed(src),
@@ -600,14 +564,9 @@ impl<W: Write> BinseqWriter<W> {
 }
 
 impl<W: Write> BinseqWriter<W> {
-    /// Create a new headless writer with the same configuration, using a `Vec<u8>` buffer
+    /// Create a headless writer with the same configuration, buffering to `Vec<u8>`
     ///
-    /// This is useful for parallel writing scenarios where each thread has its own
-    /// buffer that gets merged into a global writer via `ingest()`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the writer cannot be created.
+    /// Used for per-thread writers that are merged into a global writer via `ingest()`.
     pub fn new_headless_buffer(&self) -> Result<BinseqWriter<Vec<u8>>> {
         match self {
             Self::Bq(w) => {

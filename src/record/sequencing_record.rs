@@ -1,9 +1,6 @@
 use crate::{BitSize, Result, error::WriteError};
 
-/// A zero-copy record used to write sequences to binary sequence files.
-///
-/// This struct provides a unified API for writing records to all binseq formats
-/// (BQ, VBQ, and CBQ). It uses borrowed references for zero-copy efficiency.
+/// A zero-copy (borrowed) record used to write sequences to any BINSEQ format.
 ///
 /// # Example
 ///
@@ -52,11 +49,9 @@ impl<'a> SequencingRecord<'a> {
         }
     }
 
-    /// Returns the configured size of this record for CBQ format.
+    /// Returns the encoded size of this record for CBQ, given the writer configuration.
     ///
-    /// CBQ uses columnar storage so there are no per-record length prefixes.
-    /// This calculates the size based on writer configuration, ignoring any
-    /// extra data in the record that the writer won't use.
+    /// Extra data the writer won't use is not counted.
     #[inline]
     #[must_use]
     pub fn configured_size_cbq(
@@ -105,22 +100,11 @@ impl<'a> SequencingRecord<'a> {
         size
     }
 
-    /// Returns the configured size of this record for VBQ format.
+    /// Returns the encoded size of this record for VBQ (row-based, length-prefixed),
+    /// given the writer configuration.
     ///
-    /// VBQ uses a row-based format with length prefixes for each field.
-    /// This calculates the size based on writer configuration, ignoring any
-    /// extra data in the record that the writer won't use.
-    ///
-    /// The VBQ record layout is:
-    /// - Flag (8 bytes, if `has_flags`)
-    /// - `s_len` (8 bytes)
-    /// - `x_len` (8 bytes)
-    /// - `s_seq` (encoded, rounded up to 8-byte words)
-    /// - `s_qual` (raw bytes, if `has_qualities`)
-    /// - `s_header_len` + `s_header` (8 + len bytes, if `has_headers` and `s_header` present)
-    /// - `x_seq` (encoded, rounded up to 8-byte words, if paired)
-    /// - `x_qual` (raw bytes, if `has_qualities` and paired)
-    /// - `x_header_len` + `x_header` (8 + len bytes, if `has_headers` and `x_header` present)
+    /// Extra data the writer won't use is not counted.
+    /// See [`vbq`](crate::vbq) for the record layout.
     #[inline]
     #[must_use]
     pub fn configured_size_vbq(
@@ -206,7 +190,7 @@ impl<'a> SequencingRecord<'a> {
     }
 }
 
-/// A convenience builder struct for creating a [`SequencingRecord`]
+/// Builder for a [`SequencingRecord`]
 ///
 /// # Example
 ///
@@ -332,11 +316,7 @@ impl<'a> SequencingRecordBuilder<'a> {
         self
     }
 
-    /// Builds the `SequencingRecord`
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the primary sequence (`s_seq`) is not set.
+    /// Builds the `SequencingRecord`; errors if `s_seq` is not set
     pub fn build(self) -> Result<SequencingRecord<'a>> {
         let Some(s_seq) = self.s_seq else {
             return Err(WriteError::MissingSequence.into());

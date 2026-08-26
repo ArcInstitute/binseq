@@ -1,27 +1,16 @@
-//! Nucleotide sequence validation and correction policies
-//!
-//! This module provides policies for handling invalid nucleotides in sequences
-//! during encoding operations. Different policies allow for ignoring, rejecting,
-//! or correcting sequences with invalid nucleotides.
+//! Policies for handling invalid nucleotides during BQ/VBQ encoding.
 
 use rand::Rng;
 
 use crate::error::{Result, WriteError};
 
-/// A global seed for the random number generator used in randomized policies
-///
-/// This seed ensures reproducible behavior when using the `RandomDraw` policy
-/// across different runs of the program.
+/// Seed for the RNG used by `RandomDraw`, for reproducibility across runs
 pub const RNG_SEED: u64 = 42;
 
-/// Policy for handling invalid nucleotide sequences during encoding
+/// Policy for handling invalid nucleotides (anything other than A, C, G, T) during encoding
 ///
-/// When encoding sequences into binary format, non-standard nucleotides (anything
-/// other than A, C, G, or T) may be encountered. This enum defines different
-/// strategies for handling such invalid nucleotides.
-///
-/// The default policy is `IgnoreSequence`, which skips sequences containing
-/// invalid nucleotides.
+/// Defaults to `IgnoreSequence`, which skips offending sequences.
+/// Only applies to BQ/VBQ; CBQ stores `N`s natively.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum Policy {
     /// Skip sequences containing invalid nucleotides (default policy)
@@ -47,16 +36,7 @@ pub enum Policy {
     SetToT,
 }
 impl Policy {
-    /// Helper method to replace invalid nucleotides with a specific nucleotide
-    ///
-    /// This internal method processes a sequence and replaces any non-standard
-    /// nucleotides (anything other than A, C, G, or T) with the specified value.
-    ///
-    /// # Arguments
-    ///
-    /// * `sequence` - The input sequence to process
-    /// * `val` - The replacement nucleotide (should be one of A, C, G, or T)
-    /// * `ibuf` - The output buffer to store the processed sequence
+    /// Replace invalid nucleotides with a specific nucleotide
     fn fill_with_known(sequence: &[u8], val: u8, ibuf: &mut Vec<u8>) {
         for &n in sequence {
             ibuf.push(match n {
@@ -66,20 +46,7 @@ impl Policy {
         }
     }
 
-    /// Helper method to replace invalid nucleotides with random valid nucleotides
-    ///
-    /// This internal method processes a sequence and replaces any non-standard
-    /// nucleotides with randomly chosen valid nucleotides (A, C, G, or T).
-    ///
-    /// # Arguments
-    ///
-    /// * `sequence` - The input sequence to process
-    /// * `rng` - The random number generator to use for selecting replacement nucleotides
-    /// * `ibuf` - The output buffer to store the processed sequence
-    ///
-    /// # Type Parameters
-    ///
-    /// * `R` - A type that implements the `Rng` trait from the `rand` crate
+    /// Replace invalid nucleotides with randomly chosen valid nucleotides
     fn fill_with_random<R: Rng>(sequence: &[u8], rng: &mut R, ibuf: &mut Vec<u8>) {
         for &n in sequence {
             ibuf.push(match n {
@@ -89,40 +56,20 @@ impl Policy {
         }
     }
 
-    /// Process a sequence according to the selected policy for handling invalid nucleotides
+    /// Apply the policy to a sequence, writing the corrected result into `ibuf` (cleared first)
     ///
-    /// This method applies the policy to the given sequence, handling any invalid nucleotides
-    /// according to the policy's rules. It first clears the input buffer to ensure that it is empty,
-    /// then processes the sequence accordingly.
-    ///
-    /// # Arguments
-    ///
-    /// * `sequence` - The nucleotide sequence to be processed
-    /// * `ibuf` - The buffer to store the processed sequence (will be cleared first)
-    /// * `rng` - The random number generator (used only with the `RandomDraw` policy)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(true)` - If the sequence was processed and should be encoded
-    /// * `Ok(false)` - If the sequence should be skipped (for `IgnoreSequence` policy)
-    /// * `Err(Error)` - If an error occurred (for `BreakOnInvalid` policy when invalid nucleotides are found)
-    ///
-    /// # Type Parameters
-    ///
-    /// * `R` - A type that implements the `Rng` trait from the `rand` crate
+    /// Returns `Ok(true)` if the sequence should be encoded, `Ok(false)` if it should
+    /// be skipped (`IgnoreSequence`), or an error (`BreakOnInvalid`).
     ///
     /// # Examples
     ///
     /// ```
     /// # use binseq::{Policy, Result};
-    /// # use rand::thread_rng;
     /// # fn main() -> Result<()> {
-    /// let policy = Policy::SetToA;
-    /// let sequence = b"ACGTNX";
     /// let mut output = Vec::new();
-    /// let mut rng = thread_rng();
+    /// let mut rng = rand::rng();
     ///
-    /// let should_process = policy.handle(sequence, &mut output, &mut rng)?;
+    /// let should_process = Policy::SetToA.handle(b"ACGTNX", &mut output, &mut rng)?;
     ///
     /// assert!(should_process);
     /// assert_eq!(output, b"ACGTAA");
@@ -130,10 +77,7 @@ impl Policy {
     /// # }
     /// ```
     pub fn handle<R: Rng>(&self, sequence: &[u8], ibuf: &mut Vec<u8>, rng: &mut R) -> Result<bool> {
-        // First clears the input buffer to ensure that it is empty.
         ibuf.clear();
-
-        // Returns a boolean indicating whether the sequence should be processed further.
         match self {
             Self::IgnoreSequence => Ok(false),
             Self::BreakOnInvalid => {

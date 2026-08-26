@@ -1,53 +1,9 @@
-//! Reader implementation for VBQ files
+//! Reader implementation for VBQ files.
 //!
-//! This module provides functionality for reading sequence data from VBQ files,
-//! including support for compressed blocks, quality scores, paired-end reads, and sequence headers.
-//!
-//! ## Format Changes (v0.7.0+)
-//!
-//! - **Embedded Index**: Readers now load the index from within VBQ files
-//! - **Headers Support**: Optional sequence headers/identifiers can be read from each record
-//! - **Multi-bit Encoding**: Support for reading 2-bit and 4-bit nucleotide encodings
-//! - **Extended Capacity**: u64 indexing supports files with more than 4 billion records
-//!
-//! ## Index Loading
-//!
-//! The reader automatically loads the embedded index from the end of VBQ files:
-//! 1. Seeks to the end of the file to read the index trailer
-//! 2. Validates the `INDEX_END_MAGIC` marker
-//! 3. Reads the index size and decompresses the embedded index
-//! 4. Uses the index for efficient random access and parallel processing
-//!
-//! ## Memory-Mapped Reading
-//!
-//! The `MmapReader` provides efficient access to large files through memory mapping:
-//! - Zero-copy access to file data
-//! - Efficient random access using the embedded index
-//! - Support for parallel processing across record ranges
-//!
-//! ## Example
-//!
-//! ```rust,no_run
-//! use binseq::vbq::MmapReader;
-//! use binseq::BinseqRecord;
-//!
-//! // Open a VBQ file (index is automatically loaded)
-//! let mut reader = MmapReader::new("example.vbq").unwrap();
-//! let mut block = reader.new_block();
-//!
-//! // Read records with headers and quality scores
-//! while reader.read_block_into(&mut block).unwrap() {
-//!     for record in block.iter() {
-//!         let seq = record.sseq();
-//!         let header = record.sheader();
-//!         println!("Header: {}", std::str::from_utf8(header).unwrap());
-//!         println!("Sequence: {}", std::str::from_utf8(seq).unwrap());
-//!         if !record.squal().is_empty() {
-//!             println!("Quality: {}", std::str::from_utf8(record.squal()).unwrap());
-//!         }
-//!     }
-//! }
-//! ```
+//! `MmapReader` memory-maps a VBQ file for zero-copy sequential or parallel
+//! reading, handling compressed blocks, quality scores, paired-end reads, and
+//! sequence headers. The embedded index at the end of the file drives random
+//! access and parallel processing.
 
 use std::fs::File;
 use std::ops::Range;
@@ -70,18 +26,6 @@ use crate::{
     error::{ReadError, Result},
 };
 
-/// Calculates the number of 64-bit words needed to store a nucleotide sequence of the given length
-///
-/// Nucleotides are packed into 64-bit words with 2 bits per nucleotide (32 nucleotides per word).
-/// This function calculates how many 64-bit words are needed to encode a sequence of a given length.
-///
-/// # Parameters
-///
-/// * `len` - Length of the nucleotide sequence in basepairs
-///
-/// # Returns
-///
-/// The number of 64-bit words required to encode the sequence
 /// Number of bases packed into each u64 word for the given bitsize
 fn bases_per_word(bitsize: BitSize) -> usize {
     match bitsize {
@@ -138,40 +82,18 @@ struct RecordMetadata {
     has_quality: bool,
 }
 
-/// A container for a block of VBQ records
+/// A reusable container for one block of VBQ records.
 ///
-/// The `RecordBlock` struct represents a single block of records read from a VBQ file.
-/// It stores the raw data for multiple records in vectors, allowing efficient iteration
-/// over the records without copying memory for each record.
-///
-/// ## Format Support (v0.7.0+)
-///
-/// - Supports reading records with optional sequence headers
-/// - Handles both 2-bit and 4-bit nucleotide encodings
-/// - Supports quality scores and paired sequences
-/// - Compatible with both compressed and uncompressed blocks
-///
-/// The `RecordBlock` is reused when reading blocks sequentially from a file, with its
-/// contents being cleared and replaced with each new block that is read.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use binseq::vbq::MmapReader;
-///
-/// let reader = MmapReader::new("example.vbq").unwrap();
-/// let mut block = reader.new_block(); // Create a block with appropriate size
-/// ```
+/// Cleared and refilled on each `MmapReader::read_block_into` call, so records
+/// can be iterated without per-record allocation.
 pub struct RecordBlock {
     /// Bitsize of the records in the block
     bitsize: BitSize,
 
-    /// Index of the first record in the block
-    /// This allows records to maintain their global position in the file
+    /// Global index of the first record in the block
     index: usize,
 
     /// Reusable buffer for temporary storage during decompression
-    /// Using a reusable buffer reduces memory allocations
     rbuf: Vec<u8>,
 
     /// Sequence data (u64s) - small copy during parsing
@@ -180,8 +102,7 @@ pub struct RecordBlock {
     /// Record metadata stored as compact spans
     records: Vec<RecordMetadata>,
 
-    /// Maximum size of the block in bytes
-    /// This is derived from the file header's block size field
+    /// Maximum block size in bytes (from the file header)
     block_size: usize,
 
     /// Reusable zstd decompression context
@@ -197,20 +118,10 @@ pub struct RecordBlock {
     default_quality_score: u8,
 }
 impl RecordBlock {
-    /// Creates a new empty `RecordBlock` with the specified block size
+    /// Creates a new empty `RecordBlock`.
     ///
-    /// The block size should match the one specified in the VBQ file header
-    /// for proper operation. This is typically handled automatically when using
-    /// `MmapReader::new_block()`.
-    ///
-    /// # Parameters
-    ///
-    /// * `bitsize` - Bitsize of the records in the block
-    /// * `block_size` - Maximum size of the block in bytes
-    ///
-    /// # Returns
-    ///
-    /// A new empty `RecordBlock` instance
+    /// The block size must match the file header's; use `MmapReader::new_block()`
+    /// to get this automatically.
     #[must_use]
     pub fn new(bitsize: BitSize, block_size: usize) -> Self {
         Self {
@@ -227,73 +138,31 @@ impl RecordBlock {
         }
     }
 
-    /// Sets the default quality score for the block
-    ///
-    /// # Parameters
-    ///
-    /// * `score` - Default quality score for the block
+    /// Sets the default quality score for the block.
     pub fn set_default_quality_score(&mut self, score: u8) {
         self.default_quality_score = score;
         self.qbuf.clear();
     }
 
-    /// Returns the number of records in this block
-    ///
-    /// # Returns
-    ///
-    /// The number of records currently stored in this block
+    /// Returns the number of records in this block.
     #[must_use]
     pub fn n_records(&self) -> usize {
         self.records.len()
     }
 
-    /// Returns an iterator over the records in this block
-    ///
-    /// The iterator yields `RefRecord` instances that provide access to the record data
-    /// without copying the underlying data.
-    ///
-    /// # Returns
-    ///
-    /// An iterator over the records in this block
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    /// use binseq::BinseqRecord;
-    ///
-    /// let mut reader = MmapReader::new("example.vbq").unwrap();
-    /// let mut block = reader.new_block();
-    /// reader.read_block_into(&mut block).unwrap();
-    ///
-    /// // Iterate over records in the block
-    /// for record in block.iter() {
-    ///     println!("Record {}", record.index());
-    /// }
-    /// ```
+    /// Returns an iterator of zero-copy `RefRecord`s over the block.
     #[must_use]
     #[allow(clippy::iter_without_into_iter)]
     pub fn iter(&self) -> RecordBlockIter<'_> {
         RecordBlockIter::new(self)
     }
 
-    /// Updates the starting index of the block
-    ///
-    /// This is used internally to keep track of the global position of records
-    /// within the file, allowing each record to maintain its original index.
-    ///
-    /// # Parameters
-    ///
-    /// * `index` - The index of the first record in the block
+    /// Sets the global index of the first record in the block.
     fn update_index(&mut self, index: usize) {
         self.index = index;
     }
 
-    /// Clears all data from the block
-    ///
-    /// This method resets the block to an empty state, clearing all vectors and resetting
-    /// the index to 0. This is typically used when reusing a block for reading a new block
-    /// from a file.
+    /// Resets the block to an empty state for reuse.
     pub fn clear(&mut self) {
         self.index = 0;
         self.records.clear();
@@ -303,19 +172,7 @@ impl RecordBlock {
         // Note: We keep qbuf allocated for reuse
     }
 
-    /// Ingest the bytes from a block into the record block
-    ///
-    /// This method takes a slice of bytes and processes it to extract
-    /// the records from the block. It is used when reading a block from
-    /// a file into a record block.
-    ///
-    /// This is a private method used primarily for parallel processing.
-    ///
-    /// # Parameters
-    ///
-    /// * `bytes` - A slice of bytes containing the block data
-    /// * `has_quality` - A boolean indicating whether the block contains quality scores
-    /// * `has_header` - A boolean indicating whether the block contains headers
+    /// Ingests uncompressed block bytes and parses the records.
     fn ingest_bytes(
         &mut self,
         bytes: &[u8],
@@ -480,10 +337,8 @@ impl RecordBlock {
 
     /// Decodes all sequences in the block at once.
     ///
-    /// Note:
-    /// Each record's sequence is padded internally to the nearest u64.
-    /// Because of this the global decoding will include nucleotides that are not present in the original data.
-    /// We track the non-contiguous regions of the sequence separately.
+    /// Each record's sequence is padded to the nearest u64, so the decoded
+    /// buffer contains padding nucleotides; per-record spans track the real regions.
     pub fn decode_all(&mut self) -> Result<()> {
         if self.sequences.is_empty() {
             return Ok(());
@@ -718,37 +573,11 @@ impl BinseqRecord for RefRecord<'_> {
     }
 }
 
-/// Memory-mapped reader for VBQ files
+/// Memory-mapped reader for VBQ files.
 ///
-/// [`MmapReader`] provides efficient, memory-mapped access to VBQ files. It allows
-/// sequential reading of record blocks and supports parallel processing of records.
-///
-/// ## Format Support (v0.7.0+)
-///
-/// - **Embedded Index**: Automatically loads index from within VBQ files
-/// - **Headers Support**: Reads optional sequence headers/identifiers from records
-/// - **Multi-bit Encoding**: Supports both 2-bit and 4-bit nucleotide encodings
-/// - **Extended Capacity**: u64 indexing supports files with more than 4 billion records
-///
-/// Memory mapping allows the operating system to lazily load file contents as needed,
-/// which can be more efficient than standard file I/O, especially for large files.
-///
-/// The [`MmapReader`] is designed to be used in a multi-threaded environment, and it
-/// is built around [`RecordBlock`]s which are the units of data in a VBQ file.
-/// Each one would be held by a separate thread and would load data from the shared
-/// [`MmapReader`] through the [`MmapReader::read_block_into`] method. However, they can
-/// also be used in a single-threaded environment for sequential processing.
-///
-/// Each [`RecordBlock`] contains a [`BlockHeader`] and is used to access [`RefRecord`]s
-/// which implement the [`BinseqRecord`] trait.
-///
-/// ## Index Loading
-///
-/// The reader automatically loads the embedded index by:
-/// 1. Reading the index trailer from the end of the file
-/// 2. Validating the `INDEX_END_MAGIC` marker
-/// 3. Decompressing the embedded index data
-/// 4. Using the index for efficient random access and parallel processing
+/// Reads [`RecordBlock`]s sequentially via [`MmapReader::read_block_into`], or
+/// processes records in parallel via the [`ParallelReader`] trait. Blocks yield
+/// [`RefRecord`]s implementing the [`BinseqRecord`] trait.
 ///
 /// # Examples
 ///
@@ -756,26 +585,16 @@ impl BinseqRecord for RefRecord<'_> {
 /// use binseq::vbq::MmapReader;
 /// use binseq::{BinseqRecord, Result};
 ///
-/// #[allow(deprecated)]
 /// fn main() -> Result<()> {
-///     let path = "./data/subset.vbq";
-///     let mut reader = MmapReader::new(path)?; // Index loaded automatically
-///
-///     // Create buffers for sequence data and headers
+///     let mut reader = MmapReader::new("./data/subset.vbq")?;
 ///     let mut seq_buffer = Vec::new();
 ///     let mut block = reader.new_block();
 ///
-///     // Read blocks sequentially
 ///     while reader.read_block_into(&mut block)? {
-///         println!("Read a block with {} records", block.n_records());
 ///         for record in block.iter() {
-///             // Decode sequence and header
 ///             record.decode_s(&mut seq_buffer)?;
-///             let header = record.sheader();
-///
-///             println!("Header: {}", std::str::from_utf8(&header).unwrap_or(""));
+///             println!("Header: {}", std::str::from_utf8(record.sheader()).unwrap_or(""));
 ///             println!("Sequence: {}", std::str::from_utf8(&seq_buffer).unwrap_or(""));
-///
 ///             seq_buffer.clear();
 ///         }
 ///     }
@@ -802,37 +621,7 @@ pub struct MmapReader {
     default_quality_score: u8,
 }
 impl MmapReader {
-    /// Creates a new `MmapReader` for a VBQ file
-    ///
-    /// This method opens the specified file, memory-maps its contents, reads the
-    /// VBQ header information, and loads the embedded index. The reader is positioned
-    /// at the beginning of the first record block after the header.
-    ///
-    /// ## Index Loading (v0.7.0+)
-    ///
-    /// The embedded index is automatically loaded from the end of the file.
-    ///
-    /// # Parameters
-    ///
-    /// * `path` - Path to the VBQ file to open
-    ///
-    /// # Returns
-    ///
-    /// A new `MmapReader` instance if successful
-    ///
-    /// # Errors
-    ///
-    /// * `ReadError::InvalidFileType` if the path doesn't point to a regular file
-    /// * I/O errors if the file can't be opened or memory-mapped
-    /// * Header validation errors if the file doesn't contain a valid VBQ header
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    ///
-    /// let reader = MmapReader::new("path/to/file.vbq").unwrap();
-    /// ```
+    /// Opens and memory-maps a VBQ file, positioned at the first record block.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Verify it's a regular file before attempting to map
         let file = File::open(&path)?;
@@ -864,23 +653,7 @@ impl MmapReader {
         self.default_quality_score = score;
     }
 
-    /// Creates a new empty record block with the appropriate size for this file
-    ///
-    /// This creates a `RecordBlock` with a block size matching the one specified in the
-    /// file's header, ensuring it will be able to hold a full block of records.
-    ///
-    /// # Returns
-    ///
-    /// A new empty `RecordBlock` instance sized appropriately for this file
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    ///
-    /// let reader = MmapReader::new("example.vbq").unwrap();
-    /// let mut block = reader.new_block();
-    /// ```
+    /// Creates a new empty `RecordBlock` sized to this file's block size.
     #[must_use]
     pub fn new_block(&self) -> RecordBlock {
         let mut block = RecordBlock::new(self.header.bits, self.header.block as usize);
@@ -888,33 +661,12 @@ impl MmapReader {
         block
     }
 
-    /// Sets whether to decode sequences at once in each block
-    ///
-    /// # Arguments
-    ///
-    /// * `decode_block` - Whether to decode sequences at once in each block
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    ///
-    /// let mut reader = MmapReader::new("example.vbq").unwrap();
-    /// reader.set_decode_block(false);
-    /// ```
+    /// Sets whether each block's sequences are batch-decoded during parallel processing.
     pub fn set_decode_block(&mut self, decode_block: bool) {
         self.decode_block = decode_block;
     }
 
-    /// Returns a copy of the file's header information
-    ///
-    /// The header contains information about the file format, including whether
-    /// quality scores are included, whether blocks are compressed, and whether
-    /// records are paired.
-    ///
-    /// # Returns
-    ///
-    /// A copy of the file's `FileHeader`
+    /// Returns a copy of the file's header.
     #[must_use]
     pub fn header(&self) -> FileHeader {
         self.header
@@ -926,52 +678,9 @@ impl MmapReader {
         self.header.is_paired()
     }
 
-    /// Fills an existing `RecordBlock` with the next block of records from the file
+    /// Reads the next block of records into `block`, decompressing if needed.
     ///
-    /// This method reads the next block of records from the current position in the file
-    /// and populates the provided `RecordBlock` with the data. The block is cleared and reused
-    /// to avoid unnecessary memory allocations. This is the primary method for sequential
-    /// reading of VBQ files.
-    ///
-    /// The method automatically handles decompression if the file was written with
-    /// compression enabled and updates the total record count as it progresses through the file.
-    ///
-    /// # Parameters
-    ///
-    /// * `block` - A mutable reference to a `RecordBlock` to be filled with data
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(true)` - If a block was successfully read
-    /// * `Ok(false)` - If the end of the file was reached (no more blocks)
-    /// * `Err(_)` - If an error occurred during reading
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    /// use binseq::BinseqRecord;
-    /// use std::io::Write;
-    ///
-    /// let mut reader = MmapReader::new("example.vbq").unwrap();
-    /// let mut block = reader.new_block();
-    /// let mut sequence_buffer = Vec::new();
-    ///
-    /// // Read blocks until the end of file
-    /// while reader.read_block_into(&mut block).unwrap() {
-    ///     println!("Read block with {} records", block.n_records());
-    ///
-    ///     // Process each record
-    ///     for record in block.iter() {
-    ///         // Decode the nucleotide sequence
-    ///         record.decode_s(&mut sequence_buffer).unwrap();
-    ///
-    ///         // Do something with the sequence
-    ///         println!("Record {}: length {}", record.index(), sequence_buffer.len());
-    ///         sequence_buffer.clear();
-    ///     }
-    /// }
-    /// ```
+    /// Returns `Ok(false)` when the end of the data blocks is reached.
     pub fn read_block_into(&mut self, block: &mut RecordBlock) -> Result<bool> {
         // Clear the block
         block.clear();
@@ -1035,34 +744,7 @@ impl MmapReader {
         Ok(true)
     }
 
-    /// Loads the embedded block index from this VBQ file
-    ///
-    /// The block index provides metadata about each block in the file, enabling
-    /// random access to blocks and parallel processing. This method reads the
-    /// embedded index from the end of the VBQ file.
-    ///
-    /// # Returns
-    ///
-    /// The loaded `BlockIndex` if successful
-    ///
-    /// # Errors
-    ///
-    /// * File I/O errors when reading the index
-    /// * Parsing errors if the VBQ file has invalid format or missing index
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::MmapReader;
-    ///
-    /// let reader = MmapReader::new("example.vbq").unwrap();
-    ///
-    /// // Load the embedded index
-    /// let index = reader.load_index().unwrap();
-    ///
-    /// // Use the index to get information about the file
-    /// println!("Number of blocks: {}", index.n_blocks());
-    /// ```
+    /// Loads the embedded block index from the end of the file.
     pub fn load_index(&self) -> Result<BlockIndex> {
         let start_pos_magic = self.mmap.len() - 8;
         let start_pos_index_size = start_pos_magic - 8;
@@ -1093,103 +775,10 @@ impl MmapReader {
 }
 
 impl ParallelReader for MmapReader {
-    /// Processes all records in the file in parallel using multiple threads
+    /// Processes all records in parallel by distributing blocks across threads.
     ///
-    /// This method provides efficient parallel processing of VBQ files by distributing
-    /// blocks across multiple worker threads. The file's block structure is leveraged to divide
-    /// the work evenly without requiring thread synchronization during processing, which leads
-    /// to near-linear scaling with the number of threads.
-    ///
-    /// The method automatically loads or creates an index file to identify block boundaries,
-    /// then distributes the blocks among the requested number of threads. Each thread processes
-    /// its assigned blocks sequentially, but multiple blocks are processed in parallel across
-    /// threads.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `P` - A type that implements the `ParallelProcessor` trait, which defines how records are processed
-    ///
-    /// # Parameters
-    ///
-    /// * `self` - Consumes the reader, as it will be used across multiple threads
-    /// * `processor` - An instance of a type implementing `ParallelProcessor` that will be cloned for each thread
-    /// * `num_threads` - Number of worker threads to use for processing
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all records were successfully processed
-    /// * `Err(_)` - If an error occurs during processing
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::{MmapReader, RefRecord};
-    /// use binseq::{ParallelProcessor, ParallelReader, BinseqRecord, Result};
-    /// use std::sync::atomic::{AtomicUsize, Ordering};
-    /// use std::sync::Arc;
-    ///
-    /// // Create a simple processor that counts records
-    /// struct RecordCounter {
-    ///     count: Arc<AtomicUsize>,
-    ///     thread_id: usize,
-    /// }
-    ///
-    /// impl RecordCounter {
-    ///     fn new() -> Self {
-    ///         Self {
-    ///             count: Arc::new(AtomicUsize::new(0)),
-    ///             thread_id: 0,
-    ///         }
-    ///     }
-    ///
-    ///     fn total_count(&self) -> usize {
-    ///         self.count.load(Ordering::Relaxed)
-    ///     }
-    /// }
-    ///
-    /// impl Clone for RecordCounter {
-    ///     fn clone(&self) -> Self {
-    ///         Self {
-    ///             count: Arc::clone(&self.count),
-    ///             thread_id: 0,
-    ///         }
-    ///     }
-    /// }
-    ///
-    /// impl ParallelProcessor for RecordCounter {
-    ///     fn process_record<R: BinseqRecord>(&mut self, _record: R) -> Result<()> {
-    ///         self.count.fetch_add(1, Ordering::Relaxed);
-    ///         Ok(())
-    ///     }
-    ///
-    ///     fn on_batch_complete(&mut self) -> Result<()> {
-    ///         // Optional: perform actions after each block is processed
-    ///         Ok(())
-    ///     }
-    ///
-    ///     fn set_tid(&mut self, tid: usize) {
-    ///         self.thread_id = tid;
-    ///     }
-    /// }
-    ///
-    /// // Use the processor with a VBQ file
-    /// let reader = MmapReader::new("example.vbq").unwrap();
-    /// let counter = RecordCounter::new();
-    ///
-    /// // Process the file with 4 threads
-    /// reader.process_parallel(counter.clone(), 4).unwrap();
-    ///
-    /// // Get the total number of records processed
-    /// println!("Total records: {}", counter.total_count());
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// * The `ParallelProcessor` instance is cloned for each worker thread, so any shared state
-    ///   should be wrapped in thread-safe containers like `Arc`.
-    /// * The `set_tid` method is called with a unique thread ID before processing begins, which
-    ///   can be used to distinguish between worker threads.
-    /// * This method consumes the reader (takes ownership), as it's distributed across threads.
+    /// The processor is cloned per thread; share state via thread-safe
+    /// containers like `Arc`.
     fn process_parallel<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,
@@ -1199,27 +788,7 @@ impl ParallelReader for MmapReader {
         self.process_parallel_range(processor, num_threads, 0..num_records)
     }
 
-    /// Process records in parallel within a specified range
-    ///
-    /// This method allows parallel processing of a subset of records within the file,
-    /// defined by a start and end index. The method maps the record range to the
-    /// appropriate blocks and processes only the records within the specified range.
-    ///
-    /// # Arguments
-    ///
-    /// * `processor` - The processor to use for each record
-    /// * `num_threads` - The number of threads to spawn
-    /// * `start` - The starting record index (inclusive)
-    /// * `end` - The ending record index (exclusive)
-    ///
-    /// # Type Parameters
-    ///
-    /// * `P` - A type that implements `ParallelProcessor` and can be cloned
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all records were processed successfully
-    /// * `Err(Error)` - If an error occurred during processing
+    /// Processes only the records within `range` in parallel.
     fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,

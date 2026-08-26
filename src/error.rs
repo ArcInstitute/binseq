@@ -61,16 +61,10 @@ pub enum Error {
 #[derive(thiserror::Error, Debug)]
 pub enum HeaderError {
     /// The magic number in the header does not match the expected value
-    ///
-    /// # Arguments
-    /// * `u32` - The invalid magic number that was found
     #[error("Invalid magic number: {0}")]
     InvalidMagicNumber(u32),
 
     /// The format version in the header is not supported
-    ///
-    /// # Arguments
-    /// * `u8` - The unsupported version number that was found
     #[error("Invalid format version: {0}")]
     InvalidFormatVersion(u8),
 
@@ -83,10 +77,6 @@ pub enum HeaderError {
     InvalidBitSize(u8),
 
     /// The size of the data does not match what was specified in the header
-    ///
-    /// # Arguments
-    /// * First `usize` - The actual number of bytes provided
-    /// * Second `usize` - The expected number of bytes according to the header
     #[error("Invalid number of bytes provided: {0}. Expected: {1}")]
     InvalidSize(usize, usize),
 
@@ -103,19 +93,12 @@ pub enum ReadError {
     IncompatibleFile,
 
     /// The file appears to be truncated or corrupted
-    ///
-    /// # Arguments
-    /// * `usize` - The byte position where the truncation was detected
     #[error(
         "Number of bytes in file does not match expectation - possibly truncated at byte pos {0}"
     )]
     FileTruncation(usize),
 
     /// Attempted to access a record index that is beyond the available range
-    ///
-    /// # Arguments
-    /// * First `usize` - The requested record index
-    /// * Second `usize` - The maximum available record index
     #[error("Requested record index ({requested_index}) is out of record range ({max_index})")]
     OutOfRange {
         requested_index: usize,
@@ -130,25 +113,18 @@ pub enum ReadError {
     EndOfStream,
 
     /// A partial record was encountered at the end of a stream
-    ///
-    /// # Arguments
-    /// * `usize` - The number of bytes read in the partial record
     #[error("Partial record at end of stream ({0} bytes)")]
     PartialRecord(usize),
 
-    /// When a block header contains an invalid magic number
-    ///
-    /// The first parameter is the invalid magic number, the second is the position in the file
+    /// A block header contains an invalid magic number
     #[error("Unexpected Block Magic Number found: {0} at position {1}")]
     InvalidBlockMagicNumber(u64, usize),
 
-    /// When trying to read a block but reaching the end of the file unexpectedly
-    ///
-    /// The parameter is the position in the file where the read was attempted
+    /// Reached the end of the file unexpectedly while reading a block
     #[error("Unable to find an expected full block at position {0}")]
     UnexpectedEndOfFile(usize),
 
-    /// When the file metadata doesn't match the expected VBQ format
+    /// The file metadata doesn't match the expected VBQ format
     #[error("Unexpected file metadata")]
     InvalidFileType,
 
@@ -183,18 +159,11 @@ pub enum WriteError {
         obs_extended: bool,
     },
 
-    /// The length of the sequence being written does not match what was specified in the header
-    ///
-    /// # Fields
-    /// * `expected` - The sequence length specified in the header
-    /// * `got` - The actual length of the sequence being written
+    /// The length of the sequence being written does not match the header
     #[error("Sequence length ({got}) does not match the header ({expected})")]
     UnexpectedSequenceLength { expected: u32, got: usize },
 
     /// The sequence contains invalid nucleotide characters
-    ///
-    /// # Arguments
-    /// * `String` - Description of the invalid nucleotides found
     #[error("Invalid nucleotides found in sequence: {0}")]
     InvalidNucleotideSequence(String),
 
@@ -202,28 +171,23 @@ pub enum WriteError {
     #[error("Missing header in writer builder")]
     MissingHeader,
 
-    /// When a record is too large to fit in a block of the configured size
-    ///
-    /// The first parameter is the record size, the second is the maximum block size
+    /// A record is too large to fit in a block of the configured size
     #[error(
         "Encountered a record with embedded size {0} but the maximum block size is {1}. Rerun with increased block size."
     )]
     RecordSizeExceedsMaximumBlockSize(usize, usize),
-    /// When trying to ingest blocks with different sizes than expected
-    ///
-    /// The first parameter is the expected size, the second is the found size
+
+    /// Attempted to ingest blocks with a different size than expected
     #[error(
         "Incompatible block sizes encountered in BlockWriter Ingest. Found ({1}) Expected ({0})"
     )]
     IncompatibleBlockSizes(usize, usize),
 
-    /// When trying to ingest data with an incompatible header
-    ///
-    /// The first parameter is the expected header, the second is the found header
+    /// Attempted to ingest data with an incompatible header
     #[error("Incompatible headers found in vbq::Writer::ingest. Found ({1:?}) Expected ({0:?})")]
     IncompatibleHeaders(crate::vbq::FileHeader, crate::vbq::FileHeader),
 
-    /// When building a `SequencingRecord` without a primary sequence
+    /// A `SequencingRecord` was built without a primary sequence
     #[error("SequencingRecordBuilder requires a primary sequence (s_seq)")]
     MissingSequence,
 
@@ -239,14 +203,9 @@ pub enum WriteError {
 }
 
 /// Errors related to VBQ file indexing
-///
-/// These errors occur when there are issues with the index of a VBQ file,
-/// such as corruption or mismatches with the underlying file.
 #[derive(thiserror::Error, Debug)]
 pub enum IndexError {
-    /// When the magic number in the index doesn't match the expected value
-    ///
-    /// The parameter is the invalid magic number that was found
+    /// The magic number in the index doesn't match the expected value
     #[error("Invalid magic number: {0}")]
     InvalidMagicNumber(u64),
 
@@ -299,7 +258,7 @@ pub enum CbqError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum FormatError {
-    /// When the BINSEQ format could not be determined from a file's magic bytes
+    /// The BINSEQ format could not be determined from a file's magic bytes
     #[error("Unable to determine BINSEQ format from magic bytes in file: {0}")]
     UnrecognizedMagicBytes(String),
 }
