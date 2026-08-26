@@ -64,15 +64,13 @@
 
 use std::io::Write;
 
-use bitnuc_deprec::BitSize;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 use zstd::stream::copy_encode;
 
 use super::header::{BlockHeader, FileHeader};
 use crate::SequencingRecord;
+use crate::encoder::Encoder;
 use crate::error::{Result, WriteError};
-use crate::policy::{Policy, RNG_SEED};
+use crate::policy::Policy;
 use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
 use crate::vbq::index::{INDEX_END_MAGIC, IndexHeader};
 use crate::vbq::{BlockIndex, BlockRange};
@@ -392,7 +390,7 @@ impl<W: Write> Writer<W> {
 
     /// Returns the N-policy of the writer
     pub fn policy(&self) -> Policy {
-        self.encoder.policy
+        self.encoder.policy()
     }
 
     /// Checks if the writer is configured for quality scores
@@ -1071,99 +1069,6 @@ impl BlockWriter {
         other.pos -= end_byte;
 
         Ok(())
-    }
-}
-
-/// Encapsulates the logic for encoding sequences into a binary format.
-#[derive(Clone)]
-pub struct Encoder {
-    /// Bitsize of the nucleotides
-    bitsize: BitSize,
-
-    /// Reusable buffers for all nucleotides (written as 2-bit after conversion)
-    sbuffer: Vec<u64>,
-    xbuffer: Vec<u64>,
-
-    /// Reusable buffers for invalid nucleotide sequences
-    s_ibuf: Vec<u8>,
-    x_ibuf: Vec<u8>,
-
-    /// Invalid Nucleotide Policy
-    policy: Policy,
-
-    /// Random Number Generator
-    rng: SmallRng,
-}
-
-impl Encoder {
-    /// Initialize a new encoder with the given policy.
-    pub fn with_policy(bitsize: BitSize, policy: Policy) -> Self {
-        Self {
-            bitsize,
-            policy,
-            sbuffer: Vec::default(),
-            xbuffer: Vec::default(),
-            s_ibuf: Vec::default(),
-            x_ibuf: Vec::default(),
-            rng: SmallRng::seed_from_u64(RNG_SEED),
-        }
-    }
-
-    /// Encodes a single sequence as 2-bit.
-    ///
-    /// Will return `None` if the sequence is invalid and the policy does not allow correction.
-    pub fn encode_single(&mut self, primary: &[u8]) -> Result<Option<&[u64]>> {
-        // Fill the buffer with the bit representation of the nucleotides
-        self.clear();
-        if self.bitsize.encode(primary, &mut self.sbuffer).is_err() {
-            self.clear();
-            if self
-                .policy
-                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
-            {
-                self.bitsize.encode(&self.s_ibuf, &mut self.sbuffer)?;
-            } else {
-                return Ok(None);
-            }
-        }
-        Ok(Some(&self.sbuffer))
-    }
-
-    /// Encodes a pair of sequences as 2-bit.
-    ///
-    /// Will return `None` if either sequence is invalid and the policy does not allow correction.
-    pub fn encode_paired(
-        &mut self,
-        primary: &[u8],
-        extended: &[u8],
-    ) -> Result<Option<(&[u64], &[u64])>> {
-        self.clear();
-        if self.bitsize.encode(primary, &mut self.sbuffer).is_err()
-            || self.bitsize.encode(extended, &mut self.xbuffer).is_err()
-        {
-            self.clear();
-            if self
-                .policy
-                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
-                && self
-                    .policy
-                    .handle(extended, &mut self.x_ibuf, &mut self.rng)?
-            {
-                self.bitsize.encode(&self.s_ibuf, &mut self.sbuffer)?;
-                self.bitsize.encode(&self.x_ibuf, &mut self.xbuffer)?;
-            } else {
-                return Ok(None);
-            }
-        }
-        Ok(Some((&self.sbuffer, &self.xbuffer)))
-    }
-
-    /// Clear all buffers and reset the encoder.
-    pub fn clear(&mut self) {
-        self.sbuffer.clear();
-        self.xbuffer.clear();
-        self.s_ibuf.clear();
-        self.x_ibuf.clear();
     }
 }
 

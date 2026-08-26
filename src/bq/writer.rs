@@ -9,11 +9,10 @@
 
 use std::io::Write;
 
-use rand::{SeedableRng, rngs::SmallRng};
-
 use super::FileHeader;
 use crate::{
-    Policy, RNG_SEED, SequencingRecord,
+    Policy, SequencingRecord,
+    encoder::Encoder,
     error::{Result, WriteError},
 };
 
@@ -22,177 +21,6 @@ fn write_buffer<W: Write>(writer: &mut W, ebuf: &[u64]) -> Result<()> {
     ebuf.iter()
         .try_for_each(|&x| writer.write_all(&x.to_le_bytes()))?;
     Ok(())
-}
-
-/// Encodes nucleotide sequences into a compact 2-bit binary format
-///
-/// The `Encoder` handles the conversion of nucleotide sequences (A, C, G, T)
-/// into a compact binary representation where each nucleotide is stored using
-/// 2 bits. It also handles invalid nucleotides according to a configurable policy.
-///
-/// The encoder maintains internal buffers to avoid repeated allocations during
-/// encoding operations. These buffers are reused across multiple encode calls
-/// and are cleared automatically when needed.
-#[derive(Clone)]
-pub struct Encoder {
-    /// Header containing sequence length and format information
-    header: FileHeader,
-
-    /// Buffers for storing encoded nucleotides in 2-bit format
-    /// Each u64 can store 32 nucleotides (64 bits / 2 bits per nucleotide)
-    sbuffer: Vec<u64>, // Primary sequence buffer
-    xbuffer: Vec<u64>, // Extended sequence buffer
-
-    /// Temporary buffers for handling invalid nucleotides
-    /// These store the processed sequences after policy application
-    s_ibuf: Vec<u8>, // Primary sequence invalid buffer
-    x_ibuf: Vec<u8>, // Extended sequence invalid buffer
-
-    /// Policy for handling invalid nucleotides during encoding
-    policy: Policy,
-
-    /// Random number generator for the `RandomDraw` policy
-    /// Seeded with `RNG_SEED` for reproducibility
-    rng: SmallRng,
-}
-impl Encoder {
-    /// Creates a new encoder with default invalid nucleotide policy
-    ///
-    /// # Arguments
-    ///
-    /// * `header` - The header defining sequence lengths and format
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use binseq::bq::{FileHeaderBuilder, Encoder};
-    /// let header = FileHeaderBuilder::new().slen(100).build().unwrap();
-    /// let encoder = Encoder::new(header);
-    /// ```
-    #[must_use]
-    pub fn new(header: FileHeader) -> Self {
-        Self::with_policy(header, Policy::default())
-    }
-
-    /// Creates a new encoder with a specific invalid nucleotide policy
-    ///
-    /// # Arguments
-    ///
-    /// * `header` - The header defining sequence lengths and format
-    /// * `policy` - The policy for handling invalid nucleotides
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use binseq::bq::{FileHeaderBuilder, Encoder};
-    /// # use binseq::Policy;
-    /// let header = FileHeaderBuilder::new().slen(100).build().unwrap();
-    /// let encoder = Encoder::with_policy(header, Policy::SetToA);
-    /// ```
-    #[must_use]
-    pub fn with_policy(header: FileHeader, policy: Policy) -> Self {
-        Self {
-            header,
-            policy,
-            sbuffer: Vec::default(),
-            xbuffer: Vec::default(),
-            s_ibuf: Vec::default(),
-            x_ibuf: Vec::default(),
-            rng: SmallRng::seed_from_u64(RNG_SEED),
-        }
-    }
-
-    /// Returns whether the header is paired-end.
-    #[must_use]
-    pub fn is_paired(&self) -> bool {
-        self.header.is_paired()
-    }
-
-    /// Encodes a single sequence as 2-bit.
-    ///
-    /// Will return `None` if the sequence is invalid and the policy does not allow correction.
-    pub fn encode_single(&mut self, primary: &[u8]) -> Result<Option<&[u64]>> {
-        if primary.len() != self.header.slen as usize {
-            return Err(WriteError::UnexpectedSequenceLength {
-                expected: self.header.slen,
-                got: primary.len(),
-            }
-            .into());
-        }
-
-        // Fill the buffer with the 2-bit representation of the nucleotides
-        self.clear();
-        if self.header.bits.encode(primary, &mut self.sbuffer).is_err() {
-            self.clear();
-            if self
-                .policy
-                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
-            {
-                self.header.bits.encode(&self.s_ibuf, &mut self.sbuffer)?;
-            } else {
-                return Ok(None);
-            }
-        }
-
-        Ok(Some(&self.sbuffer))
-    }
-
-    /// Encodes a pair of sequences as 2-bit.
-    ///
-    /// Will return `None` if either sequence is invalid and the policy does not allow correction.
-    pub fn encode_paired(
-        &mut self,
-        primary: &[u8],
-        extended: &[u8],
-    ) -> Result<Option<(&[u64], &[u64])>> {
-        if primary.len() != self.header.slen as usize {
-            return Err(WriteError::UnexpectedSequenceLength {
-                expected: self.header.slen,
-                got: primary.len(),
-            }
-            .into());
-        }
-        if extended.len() != self.header.xlen as usize {
-            return Err(WriteError::UnexpectedSequenceLength {
-                expected: self.header.xlen,
-                got: extended.len(),
-            }
-            .into());
-        }
-
-        self.clear();
-        if self.header.bits.encode(primary, &mut self.sbuffer).is_err()
-            || self
-                .header
-                .bits
-                .encode(extended, &mut self.xbuffer)
-                .is_err()
-        {
-            self.clear();
-            if self
-                .policy
-                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
-                && self
-                    .policy
-                    .handle(extended, &mut self.x_ibuf, &mut self.rng)?
-            {
-                self.header.bits.encode(&self.s_ibuf, &mut self.sbuffer)?;
-                self.header.bits.encode(&self.x_ibuf, &mut self.xbuffer)?;
-            } else {
-                return Ok(None);
-            }
-        }
-
-        Ok(Some((&self.sbuffer, &self.xbuffer)))
-    }
-
-    /// Clear all buffers and reset the encoder.
-    pub fn clear(&mut self) {
-        self.sbuffer.clear();
-        self.xbuffer.clear();
-        self.s_ibuf.clear();
-        self.x_ibuf.clear();
-    }
 }
 
 /// Builder for creating configured `Writer` instances
@@ -275,6 +103,9 @@ pub struct Writer<W: Write> {
     /// The underlying writer for output
     inner: W,
 
+    /// Header defining sequence lengths and format
+    header: FileHeader,
+
     /// Encoder for converting sequences to binary format
     encoder: Encoder,
 
@@ -322,24 +153,25 @@ impl<W: Write> Writer<W> {
         }
         Ok(Self {
             inner,
-            encoder: Encoder::with_policy(header, policy),
+            header,
+            encoder: Encoder::with_policy(header.bits, policy),
             headless,
         })
     }
 
     /// Returns whether the header is paired-end.
     pub fn is_paired(&self) -> bool {
-        self.encoder.is_paired()
+        self.header.is_paired()
     }
 
     /// Returns the header of the writer
     pub fn header(&self) -> FileHeader {
-        self.encoder.header
+        self.header
     }
 
     /// Returns the N-policy of the writer
     pub fn policy(&self) -> Policy {
-        self.encoder.policy
+        self.encoder.policy()
     }
 
     /// Writes a record using the unified [`SequencingRecord`] API
@@ -379,7 +211,7 @@ impl<W: Write> Writer<W> {
     /// # }
     /// ```
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
-        let has_flag = self.encoder.header.flags;
+        let has_flag = self.header.flags;
         if has_flag {
             self.inner
                 .write_all(&record.flag.unwrap_or(0).to_le_bytes())?;
@@ -387,16 +219,35 @@ impl<W: Write> Writer<W> {
 
         // Check paired status - writer can require paired (record must have R2),
         // but if writer is single-end, we simply ignore any R2 data in the record.
-        if self.encoder.header.is_paired() && !record.is_paired() {
+        if self.header.is_paired() && !record.is_paired() {
             return Err(WriteError::ConfigurationMismatch {
                 attribute: "paired",
-                expected: self.encoder.header.is_paired(),
+                expected: self.header.is_paired(),
                 actual: record.is_paired(),
             }
             .into());
         }
 
-        if self.encoder.header.is_paired() {
+        // BQ records are fixed-length: validate against the header
+        if record.s_seq.len() != self.header.slen as usize {
+            return Err(WriteError::UnexpectedSequenceLength {
+                expected: self.header.slen,
+                got: record.s_seq.len(),
+            }
+            .into());
+        }
+        if self.header.is_paired() {
+            let xlen = record.x_seq.unwrap_or_default().len();
+            if xlen != self.header.xlen as usize {
+                return Err(WriteError::UnexpectedSequenceLength {
+                    expected: self.header.xlen,
+                    got: xlen,
+                }
+                .into());
+            }
+        }
+
+        if self.header.is_paired() {
             if let Some((sbuffer, xbuffer)) = self
                 .encoder
                 .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
@@ -554,69 +405,29 @@ mod testing {
         Ok(())
     }
 
-    // ==================== Encoder Tests ====================
+    // ==================== Length Validation Tests ====================
 
     #[test]
-    fn test_encoder_new() {
-        let header = FileHeaderBuilder::new().slen(8).build().unwrap();
-        let encoder = Encoder::new(header);
-        assert!(matches!(encoder.policy, Policy::IgnoreSequence));
+    fn test_push_wrong_length() -> Result<()> {
+        let mut writer = WriterBuilder::default()
+            .header(FileHeaderBuilder::new().slen(8).build()?)
+            .build(Vec::new())?;
+        let record = SequencingRecordBuilder::default().s_seq(b"ACGT").build()?;
+        assert!(writer.push(record).is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_encoder_encode_single_wrong_length() {
-        let header = FileHeaderBuilder::new().slen(8).build().unwrap();
-        let mut encoder = Encoder::new(header);
-        let result = encoder.encode_single(b"ACGT");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_encoder_encode_single_invalid_ignored() {
-        let header = FileHeaderBuilder::new().slen(8).build().unwrap();
-        let mut encoder = Encoder::with_policy(header, Policy::IgnoreSequence);
-        let result = encoder.encode_single(b"ACGTNNNN").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_encoder_encode_single_invalid_corrected() {
-        let header = FileHeaderBuilder::new().slen(8).build().unwrap();
-        let mut encoder = Encoder::with_policy(header, Policy::SetToA);
-        let result = encoder.encode_single(b"ACGTNNNN").unwrap();
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_encoder_encode_paired_wrong_primary_length() {
-        let header = FileHeaderBuilder::new().slen(8).xlen(8).build().unwrap();
-        let mut encoder = Encoder::new(header);
-        let result = encoder.encode_paired(b"ACGT", b"ACGTACGT");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_encoder_encode_paired_wrong_extended_length() {
-        let header = FileHeaderBuilder::new().slen(8).xlen(8).build().unwrap();
-        let mut encoder = Encoder::new(header);
-        let result = encoder.encode_paired(b"ACGTACGT", b"ACGT");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_encoder_encode_paired_invalid_ignored() {
-        let header = FileHeaderBuilder::new().slen(8).xlen(8).build().unwrap();
-        let mut encoder = Encoder::with_policy(header, Policy::IgnoreSequence);
-        let result = encoder.encode_paired(b"ACGTNNNN", b"ACGTACGT").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_encoder_encode_paired_invalid_corrected() {
-        let header = FileHeaderBuilder::new().slen(8).xlen(8).build().unwrap();
-        let mut encoder = Encoder::with_policy(header, Policy::SetToA);
-        let result = encoder.encode_paired(b"ACGTNNNN", b"NNNNACGT").unwrap();
-        assert!(result.is_some());
+    fn test_push_wrong_extended_length() -> Result<()> {
+        let mut writer = WriterBuilder::default()
+            .header(FileHeaderBuilder::new().slen(8).xlen(8).build()?)
+            .build(Vec::new())?;
+        let record = SequencingRecordBuilder::default()
+            .s_seq(b"ACGTACGT")
+            .x_seq(b"ACGT")
+            .build()?;
+        assert!(writer.push(record).is_err());
+        Ok(())
     }
 
     // ==================== WriterBuilder Tests ====================

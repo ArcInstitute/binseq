@@ -242,4 +242,4 @@ mod writer;
 
 pub use header::{FILE_MAGIC, FileHeader, FileHeaderBuilder, SIZE_HEADER};
 pub use reader::{MmapReader, RefRecord, StreamReader};
-pub use writer::{Encoder, Writer, WriterBuilder};
+pub use writer::{Writer, WriterBuilder};

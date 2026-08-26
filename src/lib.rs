@@ -81,6 +81,9 @@
 /// BQ - fixed length records, no quality scores
 pub mod bq;
 
+/// Shared nucleotide encoder for BQ/VBQ writers
+mod encoder;
+
 /// Error definitions
 pub mod error;
 
