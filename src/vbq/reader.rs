@@ -509,7 +509,7 @@ impl RecordBlock {
         }
         // Calculate offset in decoded buffer (accounting for padding)
         let offset = word_offset * bases_per_word(self.bitsize);
-        Some(&self.dbuf[offset..offset + len])
+        self.dbuf.get(offset..offset + len)
     }
 
     /// Get decoded primary sequence for a record by index

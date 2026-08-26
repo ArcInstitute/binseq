@@ -929,13 +929,17 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn sseq(&self) -> &[u8] {
-        &self.block.seq[self.sseq_span.clone()]
+        self.block
+            .seq
+            .get(self.sseq_span.clone())
+            .unwrap_or_default()
     }
 
     fn xseq(&self) -> &[u8] {
         self.xseq_span
             .as_ref()
-            .map_or(&[], |span| &self.block.seq[span.clone()])
+            .and_then(|span| self.block.seq.get(span.clone()))
+            .unwrap_or_default()
     }
 
     fn has_quality(&self) -> bool {

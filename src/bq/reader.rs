@@ -179,7 +179,7 @@ impl BinseqRecord for BatchRecord<'_> {
             lbound += scalar;
             rbound += scalar;
         }
-        &self.dbuf[lbound..rbound]
+        self.dbuf.get(lbound..rbound).unwrap_or_default()
     }
     /// Override this method since we can make use of block information
     fn xseq(&self) -> &[u8] {
@@ -191,7 +191,7 @@ impl BinseqRecord for BatchRecord<'_> {
             lbound += scalar;
             rbound += scalar;
         }
-        &self.dbuf[lbound..rbound]
+        self.dbuf.get(lbound..rbound).unwrap_or_default()
     }
     fn squal(&self) -> &[u8] {
         self.inner.squal()
