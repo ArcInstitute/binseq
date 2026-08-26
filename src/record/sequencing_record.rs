@@ -269,10 +269,23 @@ impl<'a> SequencingRecordBuilder<'a> {
         self
     }
 
+    /// Sets the primary header from an Option
+    pub fn opt_s_header(mut self, s_header: Option<&'a [u8]>) -> Self {
+        self.s_header = s_header;
+        self
+    }
+
     /// Sets the extended/paired sequence
     #[must_use]
     pub fn x_seq(mut self, x_seq: &'a [u8]) -> Self {
         self.x_seq = Some(x_seq);
+        self
+    }
+
+    /// Sets the extended/paired sequence from an Option
+    #[must_use]
+    pub fn opt_x_seq(mut self, x_seq: Option<&'a [u8]>) -> Self {
+        self.x_seq = x_seq;
         self
     }
 
@@ -294,6 +307,13 @@ impl<'a> SequencingRecordBuilder<'a> {
     #[must_use]
     pub fn x_header(mut self, x_header: &'a [u8]) -> Self {
         self.x_header = Some(x_header);
+        self
+    }
+
+    /// Sets the extended header from an Option
+    #[must_use]
+    pub fn opt_x_header(mut self, x_header: Option<&'a [u8]>) -> Self {
+        self.x_header = x_header;
         self
     }
 
@@ -381,12 +401,19 @@ mod tests {
         let record = SequencingRecordBuilder::default()
             .s_seq(b"ACGT")
             .opt_s_qual(Some(b"FFFF"))
+            .opt_s_header(Some(b"s_hdr"))
+            .opt_x_seq(Some(b"TGCA"))
             .opt_x_qual(None)
+            .opt_x_header(None)
             .opt_flag(Some(42))
             .build()
             .unwrap();
+        // field access and getters are equivalent
         assert_eq!(record.s_qual, Some(b"FFFF".as_slice()));
+        assert_eq!(record.s_header, Some(b"s_hdr".as_slice()));
+        assert_eq!(record.x_seq, Some(b"TGCA".as_slice()));
         assert_eq!(record.x_qual, None);
+        assert_eq!(record.x_header, None);
         assert_eq!(record.flag, Some(42));
     }
 
