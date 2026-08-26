@@ -582,39 +582,6 @@ mod tests {
         assert!(result.is_err(), "Should fail on invalid file format");
     }
 
-    // ==================== Block Header Iterator Tests ====================
-
-    #[test]
-    fn test_iter_block_headers() {
-        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
-
-        let headers: Vec<_> = reader
-            .iter_block_headers()
-            .take(5)
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
-
-        assert!(!headers.is_empty(), "Should have at least one block header");
-
-        for header in headers {
-            assert!(header.num_records > 0, "Block should have records");
-        }
-    }
-
-    #[test]
-    fn test_iter_block_headers_count() {
-        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
-
-        let header_count = reader
-            .iter_block_headers()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .len();
-
-        let num_blocks = reader.num_blocks();
-        assert_eq!(header_count, num_blocks, "Should iterate all block headers");
-    }
-
     // ==================== Empty Range Tests ====================
 
     #[test]

@@ -84,11 +84,6 @@ impl<W: io::Write> ColumnarBlockWriter<W> {
         self.block.header
     }
 
-    /// Calculate the usage of the block as a percentage
-    pub fn usage(&self) -> f64 {
-        self.block.usage()
-    }
-
     /// Push a record to the writer
     ///
     /// Returns `Ok(true)` if the record was written successfully.
@@ -210,12 +205,6 @@ impl ColumnarBlockWriter<Vec<u8>> {
     /// Clears the incomplete-block state
     pub fn clear_incomplete_data(&mut self) {
         self.block.clear();
-    }
-
-    /// Returns the number of bytes written to the inner data structure
-    #[must_use]
-    pub fn bytes_written(&self) -> usize {
-        self.inner.len()
     }
 }
 

@@ -150,52 +150,28 @@ impl Index {
         self.ranges.len()
     }
 
-    #[must_use]
-    pub fn iter_blocks(&self) -> BlockIter<'_> {
-        BlockIter {
-            index: self,
-            pos: 0,
-        }
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRange> + '_ {
+        self.ranges.iter().copied()
     }
 
+    /// Returns the average block size in bytes (0.0 for indexes with fewer than two blocks)
     #[must_use]
     pub fn average_block_size(&self) -> f64 {
-        let mut block_iter = self.iter_blocks();
-        let Some(mut last_block) = block_iter.next() else {
+        if self.ranges.len() < 2 {
             return 0.0;
-        };
-        let mut total_size = 0.0;
-        let mut count = 0;
-        for block in block_iter {
-            let last_block_size = block.offset - last_block.offset;
-            total_size += last_block_size as f64;
-            count += 1;
-            last_block = block;
         }
-        total_size / f64::from(count)
+        let total: u64 = self
+            .ranges
+            .windows(2)
+            .map(|pair| pair[1].offset - pair[0].offset)
+            .sum();
+        total as f64 / (self.ranges.len() - 1) as f64
     }
 
+    /// Prints a debug summary of each block range to stdout
     pub fn pprint(&self) {
         for block in self.iter_blocks() {
             println!("{block:?}");
-        }
-    }
-}
-
-pub struct BlockIter<'a> {
-    index: &'a Index,
-    pos: usize,
-}
-impl Iterator for BlockIter<'_> {
-    type Item = BlockRange;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.index.num_blocks() {
-            None
-        } else {
-            let block = self.index.ranges[self.pos];
-            self.pos += 1;
-            Some(block)
         }
     }
 }

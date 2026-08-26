@@ -70,8 +70,6 @@ pub struct ColumnarBlock {
 
     /// Total nucleotides in this block
     pub(crate) nuclen: usize,
-    /// Number of npos positions
-    pub(crate) num_npos: usize,
     /// Current size of this block (virtual)
     current_size: usize,
 
@@ -113,7 +111,6 @@ impl ColumnarBlock {
             self.num_sequences = 0;
             self.num_records = 0;
             self.current_size = 0;
-            self.num_npos = 0;
             self.len_nef = 0;
         }
 
@@ -369,7 +366,6 @@ impl ColumnarBlock {
     /// Find all positions of 'N' in the sequence
     fn fill_npos(&mut self) -> Result<()> {
         bitnuc::ambiguous_bases(&self.seq, &mut self.npos);
-        self.num_npos = self.npos.len();
 
         // build Elias-Fano encoding for N positions
         if self.npos.is_empty() {
@@ -462,7 +458,6 @@ impl ColumnarBlock {
             copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
 
             let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
-            self.num_npos = ef.len();
             self.ef = Some(ef);
         }
 
@@ -630,7 +625,6 @@ impl ColumnarBlock {
 
             // reinitialize the EliasFano encoding
             let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
-            self.num_npos = ef.len();
             self.ef = Some(ef);
         }
 

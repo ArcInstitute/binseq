@@ -59,7 +59,6 @@ impl BlockHeader {
     }
 
     /// Calculate the length of the block in bytes.
-    #[allow(dead_code)]
     #[must_use]
     pub fn block_len(&self) -> usize {
         (self.len_z_seq_len
