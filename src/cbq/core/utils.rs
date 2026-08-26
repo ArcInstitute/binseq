@@ -80,25 +80,7 @@ pub(crate) fn calculate_offsets(values: &[u64], offsets: &mut Vec<u64>) {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Span {
-    offset: usize,
-    length: usize,
-}
-impl Span {
-    pub fn new(offset: usize, length: usize) -> Self {
-        Span { offset, length }
-    }
-
-    pub fn new_u64(offset: u64, length: u64) -> Self {
-        Span::new(offset as usize, length as usize)
-    }
-
-    pub fn range(&self) -> std::ops::Range<usize> {
-        self.offset..self.offset + self.length
-    }
-
-    pub fn len(&self) -> usize {
-        self.length
-    }
+/// Build a `Range<usize>` from a u64 offset and length.
+pub(crate) fn span(offset: u64, length: u64) -> std::ops::Range<usize> {
+    offset as usize..(offset + length) as usize
 }

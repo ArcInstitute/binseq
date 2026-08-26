@@ -10,7 +10,7 @@ use crate::cbq::core::utils::sized_compress;
 use crate::error::{CbqError, WriteError};
 use crate::{BinseqRecord, BitSize, DEFAULT_QUALITY_SCORE, Result};
 
-use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
+use super::utils::{calculate_offsets, extension_read, resize_uninit, slice_and_increment, span};
 use super::{BlockHeader, BlockRange, FileHeader};
 use crate::SequencingRecord;
 
@@ -767,10 +767,9 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 self.index
             };
 
-            let sseq_span =
-                Span::new_u64(self.block.l_seq_offsets[seq_idx], self.block.l_seq[seq_idx]);
+            let sseq_span = span(self.block.l_seq_offsets[seq_idx], self.block.l_seq[seq_idx]);
             let sheader_span = if self.has_headers {
-                Some(Span::new_u64(
+                Some(span(
                     self.block.l_header_offsets[seq_idx],
                     self.block.l_headers[seq_idx],
                 ))
@@ -778,7 +777,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 None
             };
             let xseq_span = if self.is_paired {
-                Some(Span::new_u64(
+                Some(span(
                     self.block.l_seq_offsets[seq_idx + 1],
                     self.block.l_seq[seq_idx + 1],
                 ))
@@ -786,7 +785,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 None
             };
             let xheader_span = if self.is_paired && self.has_headers {
-                Some(Span::new_u64(
+                Some(span(
                     self.block.l_header_offsets[seq_idx + 1],
                     self.block.l_headers[seq_idx + 1],
                 ))
@@ -841,7 +840,7 @@ impl RefRecordIndex {
 }
 
 /// A reference to a record in a [`ColumnarBlock`](crate::cbq::ColumnarBlock) that implements the [`BinseqRecord`](crate::BinseqRecord) trait
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RefRecord<'a> {
     /// A reference to the block containing this record
     block: &'a ColumnarBlock,
@@ -856,16 +855,16 @@ pub struct RefRecord<'a> {
     global_index: usize,
 
     /// Span of the primary sequence within the block
-    sseq_span: Span,
+    sseq_span: std::ops::Range<usize>,
 
     /// Span of the extended sequence within the block
-    xseq_span: Option<Span>,
+    xseq_span: Option<std::ops::Range<usize>>,
 
     /// Span of the primary header within the block
-    sheader_span: Option<Span>,
+    sheader_span: Option<std::ops::Range<usize>>,
 
     /// Span of the extended header within the block
-    xheader_span: Option<Span>,
+    xheader_span: Option<std::ops::Range<usize>>,
 
     /// A buffer to the name of this record when not storing headers
     rr_index: RefRecordIndex,
@@ -888,16 +887,16 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn sheader(&self) -> &[u8] {
-        if let Some(span) = self.sheader_span {
-            &self.block.headers[span.range()]
+        if let Some(span) = &self.sheader_span {
+            &self.block.headers[span.clone()]
         } else {
             self.rr_index.as_bytes()
         }
     }
 
     fn xheader(&self) -> &[u8] {
-        if let Some(span) = self.xheader_span {
-            &self.block.headers[span.range()]
+        if let Some(span) = &self.xheader_span {
+            &self.block.headers[span.clone()]
         } else {
             self.rr_index.as_bytes()
         }
@@ -916,7 +915,7 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn xlen(&self) -> u64 {
-        self.xseq_span.map_or(0, |span| span.len() as u64)
+        self.xseq_span.as_ref().map_or(0, |span| span.len() as u64)
     }
 
     fn decode_s(&self, buf: &mut Vec<u8>) -> crate::Result<()> {
@@ -930,12 +929,13 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn sseq(&self) -> &[u8] {
-        &self.block.seq[self.sseq_span.range()]
+        &self.block.seq[self.sseq_span.clone()]
     }
 
     fn xseq(&self) -> &[u8] {
         self.xseq_span
-            .map_or(&[], |span| &self.block.seq[span.range()])
+            .as_ref()
+            .map_or(&[], |span| &self.block.seq[span.clone()])
     }
 
     fn has_quality(&self) -> bool {
@@ -944,7 +944,7 @@ impl BinseqRecord for RefRecord<'_> {
 
     fn squal(&self) -> &[u8] {
         if self.has_quality() {
-            &self.block.qual[self.sseq_span.range()]
+            &self.block.qual[self.sseq_span.clone()]
         } else {
             &self.qbuf[..self.slen() as usize]
         }
@@ -952,9 +952,9 @@ impl BinseqRecord for RefRecord<'_> {
 
     fn xqual(&self) -> &[u8] {
         if self.has_quality()
-            && let Some(span) = self.xseq_span
+            && let Some(span) = &self.xseq_span
         {
-            &self.block.qual[span.range()]
+            &self.block.qual[span.clone()]
         } else {
             &self.qbuf[..self.xlen() as usize]
         }

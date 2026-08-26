@@ -83,11 +83,17 @@ use crate::{
 /// # Returns
 ///
 /// The number of 64-bit words required to encode the sequence
-fn encoded_sequence_len(len: u64, bitsize: BitSize) -> usize {
+/// Number of bases packed into each u64 word for the given bitsize
+fn bases_per_word(bitsize: BitSize) -> usize {
     match bitsize {
-        BitSize::Two => len.div_ceil(32) as usize,
-        BitSize::Four => len.div_ceil(16) as usize,
+        BitSize::Two => 32,
+        BitSize::Four => 16,
     }
+}
+
+/// Number of u64 words needed to store `len` bases at the given bitsize
+fn encoded_sequence_len(len: u64, bitsize: BitSize) -> usize {
+    len.div_ceil(bases_per_word(bitsize) as u64) as usize
 }
 
 /// Represents a span (offset, length) into a buffer
@@ -497,24 +503,21 @@ impl RecordBlock {
         Ok(())
     }
 
+    /// Slice the decoded buffer for a record given a word span and base length
+    fn decoded(&self, word_offset: usize, len: usize) -> Option<&[u8]> {
+        if self.dbuf.is_empty() {
+            return None;
+        }
+        // Calculate offset in decoded buffer (accounting for padding)
+        let offset = word_offset * bases_per_word(self.bitsize);
+        Some(&self.dbuf[offset..offset + len])
+    }
+
     /// Get decoded primary sequence for a record by index
     #[must_use]
     pub fn get_decoded_s(&self, record_idx: usize) -> Option<&[u8]> {
         let meta = self.records.get(record_idx)?;
-        if self.dbuf.is_empty() {
-            return None;
-        }
-
-        let bases_per_word = match self.bitsize {
-            BitSize::Two => 32,
-            BitSize::Four => 16,
-        };
-
-        // Calculate offset in decoded buffer (accounting for padding)
-        let offset = meta.s_seq_span.offset * bases_per_word;
-        let len = meta.slen as usize;
-
-        Some(&self.dbuf[offset..offset + len])
+        self.decoded(meta.s_seq_span.offset, meta.slen as usize)
     }
 
     /// Get decoded extended sequence for a record by index
@@ -524,19 +527,7 @@ impl RecordBlock {
         if meta.xlen == 0 {
             return Some(&[]);
         }
-        if self.dbuf.is_empty() {
-            return None;
-        }
-
-        let bases_per_word = match self.bitsize {
-            BitSize::Two => 32,
-            BitSize::Four => 16,
-        };
-
-        let offset = meta.x_seq_span.offset * bases_per_word;
-        let len = meta.xlen as usize;
-
-        Some(&self.dbuf[offset..offset + len])
+        self.decoded(meta.x_seq_span.offset, meta.xlen as usize)
     }
 }
 

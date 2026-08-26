@@ -474,6 +474,20 @@ impl<W: Write> Writer<W> {
     /// writer.push(record).unwrap();
     /// writer.finish().unwrap();
     /// ```
+    /// Flush the current block and record its range in the index
+    fn flush_block(&mut self) -> Result<()> {
+        let block_header = self.cblock.flush(&mut self.inner)?;
+        self.ranges.push(BlockRange::new(
+            self.bytes_written as u64,
+            block_header.size,
+            block_header.records,
+            self.records_written as u64,
+        ));
+        self.bytes_written += block_header.size_with_header();
+        self.records_written += block_header.records as usize;
+        Ok(())
+    }
+
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
         // Check paired status - writer can require paired (record must have R2),
         // but if writer is single-end, we simply ignore any R2 data in the record.
@@ -513,46 +527,27 @@ impl<W: Write> Writer<W> {
             self.header.bits,
         );
 
-        if self.header.is_paired() {
-            // encode the sequences
-            if let Some((sbuffer, xbuffer)) = self
-                .encoder
-                .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
-            {
-                if self.cblock.exceeds_block_size(record_size)? {
-                    impl_flush_block(
-                        &mut self.inner,
-                        &mut self.cblock,
-                        &mut self.ranges,
-                        &mut self.bytes_written,
-                        &mut self.records_written,
-                    )?;
-                }
-
-                self.cblock.write_record(&record, sbuffer, Some(xbuffer))?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            // encode the sequence
-            if let Some(sbuffer) = self.encoder.encode_single(record.s_seq)? {
-                if self.cblock.exceeds_block_size(record_size)? {
-                    impl_flush_block(
-                        &mut self.inner,
-                        &mut self.cblock,
-                        &mut self.ranges,
-                        &mut self.bytes_written,
-                        &mut self.records_written,
-                    )?;
-                }
-
-                self.cblock.write_record(&record, sbuffer, None)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+        // flush the current block first if this record would overflow it
+        if self.cblock.exceeds_block_size(record_size)? {
+            self.flush_block()?;
         }
+
+        // encode the sequence(s); a `None` means the record was skipped by policy
+        let encoded = if self.header.is_paired() {
+            self.encoder
+                .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
+                .map(|(sbuffer, xbuffer)| (sbuffer, Some(xbuffer)))
+        } else {
+            self.encoder
+                .encode_single(record.s_seq)?
+                .map(|sbuffer| (sbuffer, None))
+        };
+        let Some((sbuffer, xbuffer)) = encoded else {
+            return Ok(false);
+        };
+
+        self.cblock.write_record(&record, sbuffer, xbuffer)?;
+        Ok(true)
     }
 
     /// Finishes writing and flushes all data to the underlying writer
@@ -593,13 +588,7 @@ impl<W: Write> Writer<W> {
     /// ```
     pub fn finish(&mut self) -> Result<()> {
         // Flush any remaining data in the current block
-        impl_flush_block(
-            &mut self.inner,
-            &mut self.cblock,
-            &mut self.ranges,
-            &mut self.bytes_written,
-            &mut self.records_written,
-        )?;
+        self.flush_block()?;
         self.inner.flush()?;
 
         // Always write the index - this is critical for VBQ file validity
@@ -725,7 +714,7 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    pub fn write_index(&mut self) -> Result<()> {
+    fn write_index(&mut self) -> Result<()> {
         // Build the index
         let index_header = IndexHeader::new(self.bytes_written as u64);
         let block_index = BlockIndex {
@@ -751,26 +740,6 @@ impl<W: Write> Writer<W> {
 
         Ok(())
     }
-}
-
-fn impl_flush_block<W: Write>(
-    writer: &mut W,
-    cblock: &mut BlockWriter,
-    ranges: &mut Vec<BlockRange>,
-    bytes_written: &mut usize,
-    records_written: &mut usize,
-) -> Result<()> {
-    let block_header = cblock.flush(writer)?;
-    let range = BlockRange::new(
-        *bytes_written as u64,
-        block_header.size,
-        block_header.records,
-        *records_written as u64,
-    );
-    ranges.push(range);
-    *bytes_written += block_header.size_with_header();
-    *records_written += block_header.records as usize;
-    Ok(())
 }
 
 impl<W: Write> Drop for Writer<W> {
@@ -1074,9 +1043,9 @@ impl BlockWriter {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::read_u64_le;
     use super::*;
     use crate::SequencingRecordBuilder;
+    use crate::utils::read_u64_le;
     use crate::vbq::{FileHeaderBuilder, header::SIZE_HEADER};
 
     #[test]

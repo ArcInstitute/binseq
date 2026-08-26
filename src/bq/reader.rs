@@ -128,64 +128,38 @@ impl BinseqRecord for RefRecord<'_> {
 
 /// A reference to a record in the map with a precomputed decoded buffer slice
 pub struct BatchRecord<'a> {
-    /// Unprocessed buffer slice (with flags)
-    buffer: &'a [u64],
+    /// The underlying record view (encoded buffer, config, header)
+    inner: RefRecord<'a>,
     /// Decoded buffer slice
     dbuf: &'a [u8],
-    /// Record ID
-    id: u64,
-    /// The configuration that defines the layout and size of record components
-    config: RecordConfig,
-    /// A reusable pre-initialized quality score buffer
-    qbuf: &'a [u8],
-    /// Cached index string for the sequence header
-    header_buf: [u8; 20],
-    /// Length of the header in bytes
-    header_len: usize,
 }
 impl BinseqRecord for BatchRecord<'_> {
     fn bitsize(&self) -> BitSize {
-        self.config.bitsize
+        self.inner.bitsize()
     }
     fn index(&self) -> u64 {
-        self.id
+        self.inner.index()
     }
-    /// Clear the buffer and fill it with the sequence header
     fn sheader(&self) -> &[u8] {
-        &self.header_buf[..self.header_len]
+        self.inner.sheader()
     }
-
-    /// Clear the buffer and fill it with the extended header
     fn xheader(&self) -> &[u8] {
-        self.sheader()
+        self.inner.xheader()
     }
-
     fn flag(&self) -> Option<u64> {
-        if self.config.flags {
-            Some(self.buffer[0])
-        } else {
-            None
-        }
+        self.inner.flag()
     }
     fn slen(&self) -> u64 {
-        self.config.slen
+        self.inner.slen()
     }
     fn xlen(&self) -> u64 {
-        self.config.xlen
+        self.inner.xlen()
     }
     fn sbuf(&self) -> &[u64] {
-        if self.config.flags {
-            &self.buffer[1..=(self.config.schunk as usize)]
-        } else {
-            &self.buffer[..(self.config.schunk as usize)]
-        }
+        self.inner.sbuf()
     }
     fn xbuf(&self) -> &[u64] {
-        if self.config.flags {
-            &self.buffer[1 + self.config.schunk as usize..]
-        } else {
-            &self.buffer[self.config.schunk as usize..]
-        }
+        self.inner.xbuf()
     }
     fn decode_s(&self, dbuf: &mut Vec<u8>) -> Result<()> {
         dbuf.extend_from_slice(self.sseq());
@@ -197,10 +171,11 @@ impl BinseqRecord for BatchRecord<'_> {
     }
     /// Override this method since we can make use of block information
     fn sseq(&self) -> &[u8] {
-        let scalar = self.config.scalar();
+        let config = &self.inner.config;
+        let scalar = config.scalar();
         let mut lbound = 0;
-        let mut rbound = self.config.slen();
-        if self.config.flags {
+        let mut rbound = config.slen();
+        if config.flags {
             lbound += scalar;
             rbound += scalar;
         }
@@ -208,20 +183,21 @@ impl BinseqRecord for BatchRecord<'_> {
     }
     /// Override this method since we can make use of block information
     fn xseq(&self) -> &[u8] {
-        let scalar = self.config.scalar();
-        let mut lbound = scalar * self.config.schunk();
-        let mut rbound = lbound + self.config.xlen();
-        if self.config.flags {
+        let config = &self.inner.config;
+        let scalar = config.scalar();
+        let mut lbound = scalar * config.schunk();
+        let mut rbound = lbound + config.xlen();
+        if config.flags {
             lbound += scalar;
             rbound += scalar;
         }
         &self.dbuf[lbound..rbound]
     }
     fn squal(&self) -> &[u8] {
-        &self.qbuf[..self.config.slen()]
+        self.inner.squal()
     }
     fn xqual(&self) -> &[u8] {
-        &self.qbuf[..self.config.xlen()]
+        self.inner.xqual()
     }
 }
 
@@ -949,13 +925,15 @@ impl ParallelReader for MmapReader {
 
                         // initialize the record
                         let record = BatchRecord {
-                            buffer: &ebuf[ebuf_start..(ebuf_start + rsize_u64)],
+                            inner: RefRecord {
+                                buffer: &ebuf[ebuf_start..(ebuf_start + rsize_u64)],
+                                qbuf: &qbuf,
+                                id: idx as u64,
+                                config: reader.config,
+                                header_buf,
+                                header_len,
+                            },
                             dbuf: &dbuf[dbuf_start..(dbuf_start + dbuf_rsize)],
-                            qbuf: &qbuf,
-                            id: idx as u64,
-                            config: reader.config,
-                            header_buf,
-                            header_len,
                         };
 
                         // process the record

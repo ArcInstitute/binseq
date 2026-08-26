@@ -34,9 +34,8 @@
 
 use std::io::{Cursor, Read, Write};
 
-use zstd::{Decoder, Encoder};
-
 use crate::utils::{read_u32_le, read_u64_le};
+use zstd::{Decoder, Encoder};
 
 use crate::error::{IndexError, Result};
 
@@ -184,18 +183,7 @@ impl BlockRange {
         Ok(())
     }
 
-    /// Deserializes a `BlockRange` from a fixed-size buffer
-    ///
-    /// This method deserializes a `BlockRange` from a 32-byte buffer in the format
-    /// used by `write_bytes`. It's typically used when reading an index file.
-    ///
-    /// # Parameters
-    ///
-    /// * `buffer` - A fixed-size buffer containing a serialized `BlockRange`
-    ///
-    /// # Returns
-    ///
-    /// A new `BlockRange` with the values read from the buffer
+    /// Deserializes a `BlockRange` from a slice of bytes
     ///
     /// # Format
     ///
@@ -205,8 +193,12 @@ impl BlockRange {
     /// - Bytes 16-19: `block_records` (u32, little endian)
     /// - Bytes 20-27: `cumulative_records` (u64, little endian)
     /// - Bytes 28-31: reservation (ignored, default value used)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the buffer is less than 28 bytes long.
     #[must_use]
-    pub fn from_exact(buffer: &[u8; SIZE_BLOCK_RANGE]) -> Self {
+    pub fn from_bytes(buffer: &[u8]) -> Self {
         Self {
             start_offset: read_u64_le(&buffer[0..8]),
             len: read_u64_le(&buffer[8..16]),
@@ -214,30 +206,6 @@ impl BlockRange {
             cumulative_records: read_u64_le(&buffer[20..28]),
             reservation: INDEX_RESERVATION,
         }
-    }
-
-    /// Deserializes a `BlockRange` from a slice of bytes
-    ///
-    /// This is a convenience method that copies the first 32 bytes from the provided slice
-    /// into a fixed-size buffer and then calls `from_exact`. It's useful when reading from
-    /// a larger buffer that contains multiple serialized `BlockRange` instances.
-    ///
-    /// # Parameters
-    ///
-    /// * `buffer` - A slice containing at least 32 bytes with a serialized `BlockRange`
-    ///
-    /// # Returns
-    ///
-    /// A new `BlockRange` with the values read from the buffer
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if the buffer is less than 32 bytes long.
-    #[must_use]
-    pub fn from_bytes(buffer: &[u8]) -> Self {
-        let mut buf = [0; SIZE_BLOCK_RANGE];
-        buf.copy_from_slice(buffer);
-        Self::from_exact(&buf)
     }
 }
 
@@ -250,22 +218,11 @@ impl BlockRange {
 /// The header has a fixed size of 32 bytes to ensure compatibility across versions.
 #[derive(Debug, Clone, Copy)]
 pub struct IndexHeader {
-    /// Magic number to designate the index file ("VBQINDEX" in ASCII)
-    ///
-    /// This is used to verify that a file is indeed a VBQ index file.
-    /// (8 bytes in serialized form)
-    magic: u64,
-
     /// Total size of the indexed VBQ file in bytes
     ///
-    /// This is used to verify that the index matches the file it references.
-    /// (8 bytes in serialized form)
+    /// The serialized form also carries the `INDEX_MAGIC` magic number (8 bytes)
+    /// and 16 reserved bytes.
     bytes: u64,
-
-    /// Reserved bytes for future extensions
-    ///
-    /// (16 bytes in serialized form)
-    reserved: [u8; INDEX_HEADER_SIZE - 16],
 }
 impl IndexHeader {
     /// Creates a new index header for a VBQ file of the specified size
@@ -278,11 +235,7 @@ impl IndexHeader {
     ///
     /// A new `IndexHeader` instance with the appropriate magic number and size
     pub fn new(bytes: u64) -> Self {
-        Self {
-            magic: INDEX_MAGIC,
-            bytes,
-            reserved: [42; INDEX_HEADER_SIZE - 16],
-        }
+        Self { bytes }
     }
     /// Reads an index header from the provided reader
     ///
@@ -305,28 +258,14 @@ impl IndexHeader {
     /// - Bytes 0-7: magic number (u64, little endian, must be `INDEX_MAGIC`)
     /// - Bytes 8-15: file size in bytes (u64, little endian)
     /// - Bytes 16-31: reserved for future extensions
-    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self> {
-        let mut buffer = [0; INDEX_HEADER_SIZE];
-        reader.read_exact(&mut buffer)?;
+    pub fn from_bytes(buffer: &[u8]) -> Result<Self> {
         let magic = read_u64_le(&buffer[0..8]);
-        let bytes = read_u64_le(&buffer[8..16]);
-        let Ok(reserved) = buffer[16..INDEX_HEADER_SIZE].try_into() else {
-            return Err(IndexError::InvalidReservedBytes.into());
-        };
         if magic != INDEX_MAGIC {
             return Err(IndexError::InvalidMagicNumber(magic).into());
         }
         Ok(Self {
-            magic,
-            bytes,
-            reserved,
+            bytes: read_u64_le(&buffer[8..16]),
         })
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut buffer = [0; INDEX_HEADER_SIZE];
-        buffer.copy_from_slice(&bytes[..INDEX_HEADER_SIZE]);
-        Self::from_reader(&mut Cursor::new(buffer))
     }
 
     /// Serializes the index header to a binary format and writes it to the provided writer
@@ -349,11 +288,10 @@ impl IndexHeader {
     /// - Bytes 0-7: magic number (u64, little endian)
     /// - Bytes 8-15: file size in bytes (u64, little endian)
     /// - Bytes 16-31: reserved for future extensions
-    pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
-        let mut buffer = [0; INDEX_HEADER_SIZE];
-        buffer[0..8].copy_from_slice(&self.magic.to_le_bytes());
+    pub fn write_bytes<W: Write>(self, writer: &mut W) -> Result<()> {
+        let mut buffer = [42; INDEX_HEADER_SIZE];
+        buffer[0..8].copy_from_slice(&INDEX_MAGIC.to_le_bytes());
         buffer[8..16].copy_from_slice(&self.bytes.to_le_bytes());
-        buffer[16..].copy_from_slice(&self.reserved);
         writer.write_all(&buffer)?;
         Ok(())
     }
@@ -520,13 +458,14 @@ impl BlockIndex {
         &self.ranges
     }
 
+    /// Prints a tab-separated summary of each block range to stdout
     pub fn pprint(&self) {
-        self.ranges.iter().for_each(|range| {
+        for range in &self.ranges {
             println!(
                 "{}\t{}\t{}\t{}",
                 range.start_offset, range.len, range.block_records, range.cumulative_records
             );
-        });
+        }
     }
 
     /// Returns the total number of records in the dataset
@@ -554,10 +493,10 @@ mod tests {
     // ==================== IndexHeader Tests ====================
 
     #[test]
-    fn test_index_header_from_reader_invalid_magic() {
+    fn test_index_header_from_bytes_invalid_magic() {
         let mut buffer = [0u8; INDEX_HEADER_SIZE];
         buffer[0..8].copy_from_slice(&0xDEAD_BEEF_u64.to_le_bytes());
-        let result = IndexHeader::from_reader(&mut Cursor::new(buffer));
+        let result = IndexHeader::from_bytes(&buffer);
         assert!(result.is_err());
     }
 
@@ -566,9 +505,8 @@ mod tests {
         let header = IndexHeader::new(12345);
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
-        let parsed = IndexHeader::from_reader(&mut Cursor::new(buffer)).unwrap();
+        let parsed = IndexHeader::from_bytes(&buffer).unwrap();
         assert_eq!(parsed.bytes, 12345);
-        assert_eq!(parsed.magic, INDEX_MAGIC);
     }
 
     // ==================== BlockIndex round-trip through write_bytes/from_bytes ====================

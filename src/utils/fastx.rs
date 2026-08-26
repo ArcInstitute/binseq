@@ -215,96 +215,44 @@ impl FastxEncoderBuilder {
         };
 
         let writer = self.builder.build(self.output)?;
-        if writer.is_paired() {
-            if let Some(r2) = r2 {
-                encode_paired(writer, r1, r2, self.threads)?;
-            } else {
-                encode_interleaved(writer, r1, self.threads)?;
-            }
-        } else {
-            encode_single_file(writer, r1, self.threads)?;
+        let paired = writer.is_paired();
+        let mut encoder = Encoder::new(writer)?;
+        match (paired, r2) {
+            (true, Some(r2)) => r1.process_parallel_paired(r2, &mut encoder, self.threads),
+            (true, None) => r1.process_parallel_interleaved(&mut encoder, self.threads),
+            (false, _) => r1.process_parallel(&mut encoder, self.threads),
         }
+        .map_err(IntoBinseqError::into_binseq_error)?;
+        encoder.finish()?;
 
         Ok(())
     }
-}
-
-/// Encode single-end reads from a file
-fn encode_single_file(
-    writer: BinseqWriter<BoxedWrite>,
-    reader: fastx::Reader<BoxedRead>,
-    threads: usize,
-) -> Result<()> {
-    let mut encoder = Encoder::new(writer)?;
-    reader
-        .process_parallel(&mut encoder, threads)
-        .map_err(IntoBinseqError::into_binseq_error)?;
-    encoder.finish()?;
-    Ok(())
-}
-
-/// Encode paired-end reads from interleaved file
-fn encode_interleaved(
-    writer: BinseqWriter<BoxedWrite>,
-    reader: fastx::Reader<BoxedRead>,
-    threads: usize,
-) -> Result<()> {
-    let mut encoder = Encoder::new(writer)?;
-    reader
-        .process_parallel_interleaved(&mut encoder, threads)
-        .map_err(IntoBinseqError::into_binseq_error)?;
-    encoder.finish()?;
-    Ok(())
-}
-
-/// Encode paired-end reads from files
-fn encode_paired(
-    writer: BinseqWriter<BoxedWrite>,
-    r1: fastx::Reader<BoxedRead>,
-    r2: fastx::Reader<BoxedRead>,
-    threads: usize,
-) -> Result<()> {
-    let mut encoder = Encoder::new(writer)?;
-    r1.process_parallel_paired(r2, &mut encoder, threads)
-        .map_err(IntoBinseqError::into_binseq_error)?;
-    encoder.finish()?;
-    Ok(())
 }
 
 fn detect_seq_len(
     reader: &mut fastx::Reader<BoxedRead>,
     interleaved: bool,
 ) -> Result<(usize, usize)> {
-    // Initialze the record set
+    // Initialize the record set
     let mut rset = reader.new_record_set();
     rset.fill(reader)
         .map_err(IntoBinseqError::into_binseq_error)?;
 
-    let (slen, xlen) = if interleaved {
+    let (slen, xlen) = {
         let mut rset_iter = rset.iter();
-        let Some(Ok(slen)) = rset_iter.next().map(|r| -> Result<usize> {
-            let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
+        let mut next_len = || -> Result<usize> {
+            let rec = rset_iter
+                .next()
+                .ok_or(WriteError::EmptyFastxFile)?
+                .map_err(IntoBinseqError::into_binseq_error)?;
             Ok(rec.seq().len())
-        }) else {
-            return Err(WriteError::EmptyFastxFile.into());
         };
-        let Some(Ok(xlen)) = rset_iter.next().map(|r| -> Result<usize> {
-            let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
-            Ok(rec.seq().len())
-        }) else {
-            return Err(WriteError::EmptyFastxFile.into());
-        };
+
+        let slen = next_len()?;
+        let xlen = if interleaved { next_len()? } else { 0 };
         (slen, xlen)
-    } else {
-        let mut rset_iter = rset.iter();
-        let Some(Ok(slen)) = rset_iter.next().map(|r| -> Result<usize> {
-            let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
-            Ok(rec.seq().len())
-        }) else {
-            return Err(WriteError::EmptyFastxFile.into());
-        };
-        (slen, 0)
     };
+
     reader
         .reload(&mut rset)
         .map_err(IntoBinseqError::into_binseq_error)?;
