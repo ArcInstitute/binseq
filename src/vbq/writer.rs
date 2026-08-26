@@ -1088,9 +1088,7 @@ mod tests {
         let valid = b"ACGT".repeat(25); // 100 bp
         let invalid = b"N".repeat(300); // always skipped by IgnoreSequence
         for _ in 0..200 {
-            let invalid_record = SequencingRecordBuilder::default()
-                .s_seq(&invalid)
-                .build()?;
+            let invalid_record = SequencingRecordBuilder::default().s_seq(&invalid).build()?;
             assert!(!skipped.push(invalid_record)?);
 
             let valid_record = SequencingRecordBuilder::default().s_seq(&valid).build()?;
