@@ -123,6 +123,18 @@ impl ParallelReader for BinseqReader {
     }
 }
 
+/// Clamp a requested thread count to the available parallelism.
+///
+/// A request of 0 means "use all available cores".
+pub(crate) fn clamp_threads(num_threads: usize) -> usize {
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    if num_threads == 0 {
+        available
+    } else {
+        num_threads.min(available)
+    }
+}
+
 /// Trait for BINSEQ readers that can process records in parallel
 ///
 /// This is implemented by the **reader** not by the **processor**.

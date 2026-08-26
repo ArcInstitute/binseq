@@ -1237,11 +1237,7 @@ impl ParallelReader for MmapReader {
         range: Range<usize>,
     ) -> Result<()> {
         // Calculate the number of threads to use
-        let num_threads = if num_threads == 0 {
-            num_cpus::get()
-        } else {
-            num_threads.min(num_cpus::get())
-        };
+        let num_threads = crate::parallel::clamp_threads(num_threads);
 
         // Generate or load the index first
         let index = self.load_index()?;

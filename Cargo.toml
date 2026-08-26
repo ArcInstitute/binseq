@@ -19,7 +19,6 @@ bytemuck = { version = "1.25.1", features = ["derive", "extern_crate_alloc"] }
 itoa = "1.0.18"
 memchr = "2.8.3"
 memmap2 = "0.9.11"
-num_cpus = "1.17.0"
 paraseq = { version = "0.4.14", optional = true }
 parking_lot = {version = "0.12.5", optional = true }
 rand = { version = "0.9.5", features = ["small_rng"] }

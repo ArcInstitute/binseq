@@ -231,11 +231,7 @@ impl ParallelReader for MmapReader {
         num_threads: usize,
         range: std::ops::Range<usize>,
     ) -> crate::Result<()> {
-        let num_threads = if num_threads == 0 {
-            num_cpus::get()
-        } else {
-            num_threads.min(num_cpus::get())
-        };
+        let num_threads = crate::parallel::clamp_threads(num_threads);
 
         // validate range
         let total_records = self.num_records();
