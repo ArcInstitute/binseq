@@ -2,8 +2,8 @@ use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 
-use binseq::bq::{FileHeader, FileHeaderBuilder, StreamReader, StreamWriterBuilder};
-use binseq::{BinseqRecord, Policy, Result};
+use binseq::bq::{FileHeader, FileHeaderBuilder, StreamReader, WriterBuilder};
+use binseq::{BinseqRecord, Policy, Result, SequencingRecordBuilder};
 
 fn server(header: FileHeader, sequence: &[u8]) -> Result<()> {
     // Create a listener on localhost:3000
@@ -14,19 +14,22 @@ fn server(header: FileHeader, sequence: &[u8]) -> Result<()> {
     let (stream, _) = listener.accept().expect("Failed to accept connection");
     println!("Client connected");
 
-    let stream = BufWriter::new(stream);
+    // Buffer the network stream for efficient writes
+    let stream = BufWriter::with_capacity(16384, stream);
 
-    // Create a stream writer with the network stream as destination
-    let mut writer = StreamWriterBuilder::default()
+    // Create a writer with the network stream as destination
+    let mut writer = WriterBuilder::default()
         .header(header)
         .policy(Policy::RandomDraw)
-        .buffer_capacity(16384) // Larger buffer for network I/O
         .build(stream)?;
 
     // Write sequences in a loop
     for i in 0..10 {
-        #[allow(deprecated)]
-        writer.write_record(Some(i), sequence)?;
+        let record = SequencingRecordBuilder::default()
+            .s_seq(sequence)
+            .flag(i)
+            .build()?;
+        writer.push(record)?;
         println!("Server: Sent record {i}");
 
         // Simulate delay between records

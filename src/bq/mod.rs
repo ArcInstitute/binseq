@@ -109,18 +109,17 @@
 //!
 //! ```
 //! use binseq::{Policy, Result, BinseqRecord, SequencingRecordBuilder};
-//! use binseq::bq::{FileHeaderBuilder, StreamReader, StreamWriterBuilder};
-//! use std::io::{BufReader, Cursor};
+//! use binseq::bq::{FileHeaderBuilder, StreamReader, WriterBuilder};
+//! use std::io::{BufReader, BufWriter, Cursor};
 //!
 //! fn main() -> Result<()> {
 //!     // Create a header for sequences of length 100
 //!     let header = FileHeaderBuilder::new().slen(100).build()?;
 //!
-//!     // Create a stream writer
-//!     let mut writer = StreamWriterBuilder::default()
+//!     // Create a buffered writer over any `Write` destination
+//!     let mut writer = WriterBuilder::default()
 //!         .header(header)
-//!         .buffer_capacity(8192)
-//!         .build(Cursor::new(Vec::new()))?;
+//!         .build(BufWriter::new(Cursor::new(Vec::new())))?;
 //!
 //!     // Write sequences
 //!     let sequence = b"ACGT".repeat(25); // 100 nucleotides
@@ -131,7 +130,7 @@
 //!     writer.push(record)?;
 //!
 //!     // Get the inner buffer
-//!     let buffer = writer.into_inner()?;
+//!     let buffer = writer.into_inner().into_inner().map_err(std::io::Error::from)?;
 //!     let data = buffer.into_inner();
 //!
 //!     // Create a stream reader
@@ -243,4 +242,4 @@ mod writer;
 
 pub use header::{FILE_MAGIC, FileHeader, FileHeaderBuilder, SIZE_HEADER};
 pub use reader::{MmapReader, RefRecord, StreamReader};
-pub use writer::{Encoder, StreamWriter, StreamWriterBuilder, Writer, WriterBuilder};
+pub use writer::{Encoder, Writer, WriterBuilder};

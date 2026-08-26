@@ -433,47 +433,11 @@ impl<W: Write> Writer<W> {
         self.header.headers
     }
 
-    #[deprecated(note = "use `push` method with SequencingRecord instead")]
-    pub fn write_record(
-        &mut self,
-        flag: Option<u64>,
-        header: Option<&[u8]>,
-        sequence: &[u8],
-        quality: Option<&[u8]>,
-    ) -> Result<bool> {
-        let record = SequencingRecord::new(sequence, quality, header, None, None, None, flag);
-        self.push(record)
-    }
-
-    #[deprecated(note = "use `push` method with SequencingRecord instead")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn write_paired_record(
-        &mut self,
-        flag: Option<u64>,
-        s_header: Option<&[u8]>,
-        s_sequence: &[u8],
-        s_qual: Option<&[u8]>,
-        x_header: Option<&[u8]>,
-        x_sequence: &[u8],
-        x_qual: Option<&[u8]>,
-    ) -> Result<bool> {
-        let record = SequencingRecord::new(
-            s_sequence,
-            s_qual,
-            s_header,
-            Some(x_sequence),
-            x_qual,
-            x_header,
-            flag,
-        );
-        self.push(record)
-    }
-
     /// Writes a record using the unified [`SequencingRecord`] API
     ///
     /// This method provides a consistent interface with BQ and CBQ writers.
-    /// It automatically routes to either `write_record` or `write_paired_record`
-    /// based on whether the record contains paired data.
+    /// It automatically routes to the single or paired write path based on
+    /// whether the record contains paired data.
     ///
     /// # Arguments
     ///
