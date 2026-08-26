@@ -1,6 +1,10 @@
-use binseq::{BinseqReader, BinseqRecord, ParallelProcessor, ParallelReader, Result};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use clap::Parser;
+
+use binseq::{BinseqReader, BinseqRecord, ParallelProcessor, ParallelReader, Result};
 
 #[derive(Clone)]
 struct RangeProcessor {
@@ -63,78 +67,72 @@ impl ParallelProcessor for RangeProcessor {
     }
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!(
-            "Usage: {} <binseq_file> [num_threads] [start] [end]",
-            args[0]
-        );
-        eprintln!("Example: {} data/subset.bq 4 1000 5000", args[0]);
-        std::process::exit(1);
-    }
+#[derive(Parser)]
+struct Cli {
+    path: PathBuf,
 
-    let file_path = &args[1];
-    let num_threads = args
-        .get(2)
-        .unwrap_or(&"4".to_string())
-        .parse::<usize>()
-        .map_err(|e| binseq::Error::from(anyhow::Error::from(e)))?;
+    #[clap(short = 'T', long, default_value_t = 0)]
+    threads: usize,
+
+    /// Optional start index for processing range
+    #[clap(long, default_value_t = 0)]
+    start: usize,
+
+    /// Optional end index for processing range
+    #[clap(long, default_value_t = 10_000)]
+    end: usize,
+}
+
+fn main() -> Result<()> {
+    let args = Cli::parse();
 
     // Create reader to get total record count
-    let reader = BinseqReader::new(file_path)?;
+    let reader = BinseqReader::new(&args.path)?;
     let total_records = reader.num_records()?;
 
-    println!("File: {file_path}");
+    println!("File: {}", args.path.display());
     println!("Total records in file: {total_records}");
 
-    // Parse range arguments or use defaults
-    let start = args
-        .get(3)
-        .map(|s| s.parse::<usize>())
-        .transpose()
-        .map_err(|e| binseq::Error::from(anyhow::Error::from(e)))?
-        .unwrap_or(0);
-    let end = args
-        .get(4)
-        .map(|s| s.parse::<usize>())
-        .transpose()
-        .map_err(|e| binseq::Error::from(anyhow::Error::from(e)))?
-        .unwrap_or(total_records.min(10_000)); // Default to first 10k records
-
     // Validate range
-    if start >= total_records {
-        eprintln!("Error: Start index {start} is >= total records {total_records}");
+    if args.start >= total_records {
+        eprintln!(
+            "Error: Start index {} is >= total records {total_records}",
+            args.start
+        );
         std::process::exit(1);
     }
-    if end > total_records {
+    if args.end > total_records {
         eprintln!(
-            "Warning: End index {end} is > total records {total_records}, clamping to {total_records}"
+            "Warning: End index {} is > total records {total_records}, clamping to {total_records}",
+            args.end
         );
     }
-    let end = end.min(total_records);
+    let end = args.end.min(total_records);
 
-    if start >= end {
-        eprintln!("Error: Start index {start} must be < end index {end}");
+    if args.start >= end {
+        eprintln!(
+            "Error: Start index {} must be < end index {end}",
+            args.start
+        );
         std::process::exit(1);
     }
 
     println!(
         "Processing range: {} to {} ({} records)",
-        start,
+        args.start,
         end,
-        end - start
+        end - args.start
     );
-    println!("Using {num_threads} threads");
+    println!("Using {} threads", args.threads);
     println!();
 
     // Demonstrate processing the full file
     println!("=== Processing full file ===");
-    let reader_full = BinseqReader::new(file_path)?;
+    let reader_full = BinseqReader::new(&args.path)?;
     let processor_full = RangeProcessor::new(0, total_records);
     let start_time = std::time::Instant::now();
 
-    reader_full.process_parallel(processor_full.clone(), num_threads)?;
+    reader_full.process_parallel(processor_full.clone(), args.threads)?;
 
     let elapsed_full = start_time.elapsed();
     println!("Full file processing completed!");
@@ -144,16 +142,16 @@ fn main() -> Result<()> {
 
     // Demonstrate processing a specific range
     println!("=== Processing specific range ===");
-    let reader_range = BinseqReader::new(file_path)?;
-    let processor_range = RangeProcessor::new(start, end);
+    let reader_range = BinseqReader::new(args.path)?;
+    let processor_range = RangeProcessor::new(args.start, end);
     let start_time = std::time::Instant::now();
 
-    reader_range.process_parallel_range(processor_range.clone(), num_threads, start..end)?;
+    reader_range.process_parallel_range(processor_range.clone(), args.threads, args.start..end)?;
 
     let elapsed_range = start_time.elapsed();
     println!("Range processing completed!");
     println!("Records processed: {}", processor_range.count());
-    println!("Expected records: {}", end - start);
+    println!("Expected records: {}", end - args.start);
     println!("Time taken: {elapsed_range:.2?}");
 
     // Compare performance

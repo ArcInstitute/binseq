@@ -11,7 +11,7 @@ categories = ["science::bioinformatics", "encoding", "data-structures"]
 keywords = ["binary", "nucleotide", "sequencing", "genomics", "fastq"]
 
 [dependencies]
-anyhow = {version = "1.0.103", optional = true}
+anyhow = { version = "1.0.103", optional = true }
 bitnuc-deprec = { package ="bitnuc", version = "0.4.1" }
 bitnuc = { version = "0.5.1" }
 bytemuck = { version = "1.25.1", features = ["derive", "extern_crate_alloc"] }
@@ -33,7 +33,7 @@ paraseq = "0.4.14"
 tempfile = "3.27.0"
 
 [features]
-default = ["paraseq", "anyhow"]
+default = []
 anyhow = ["dep:anyhow"]
 paraseq = ["dep:paraseq", "dep:parking_lot"]
 
@@ -44,3 +44,11 @@ cast_precision_loss = "allow"
 missing_errors_doc = "allow"
 struct_excessive_bools = "allow"
 fn_params_excessive_bools = "allow"
+
+[[example]]
+name = "auto-write"
+required-features = ["paraseq"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

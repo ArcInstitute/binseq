@@ -305,7 +305,7 @@ impl BinseqWriterBuilder {
 
     /// Encode FASTX file(s) to BINSEQ format
     ///
-    /// This method returns a [`FastxEncoderBuilder`] that allows you to configure
+    /// This method returns a [`FastxEncoderBuilder`](crate::utils::FastxEncoderBuilder) that allows you to configure
     /// the input source and threading options before executing the encoding.
     ///
     /// This is an alternative to [`build`](Self::build) that directly processes
@@ -321,19 +321,19 @@ impl BinseqWriterBuilder {
     /// use binseq::write::{BinseqWriterBuilder, Format};
     /// use std::fs::File;
     ///
-    /// // Encode from stdin to VBQ
-    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
+    /// // Encode from stdin to CBQ
+    /// let writer = BinseqWriterBuilder::new(Format::Cbq)
     ///     .quality(true)
     ///     .headers(true)
-    ///     .encode_fastx(File::create("output.vbq")?)
+    ///     .encode_fastx(File::create("output.cbq")?)
     ///     .input_stdin()
     ///     .threads(8)
     ///     .run()?;
     ///
     /// // Encode paired-end reads
-    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
+    /// let writer = BinseqWriterBuilder::new(Format::Cbq)
     ///     .quality(true)
-    ///     .encode_fastx(File::create("output.vbq")?)
+    ///     .encode_fastx(File::create("output.cbq")?)
     ///     .input_paired("R1.fastq", "R2.fastq")
     ///     .run()?;
     /// # Ok::<(), binseq::Error>(())

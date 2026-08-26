@@ -372,8 +372,13 @@ impl ColumnarBlock {
             self.ef = None;
             Ok(())
         } else {
-            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())?;
-            ef_builder.extend(self.npos.iter().map(|idx| *idx as usize))?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())
+                .map_err(|e| e.into_boxed_dyn_error())?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            ef_builder
+                .extend(self.npos.iter().map(|idx| *idx as usize))
+                .map_err(|e| e.into_boxed_dyn_error())?;
             let ef = ef_builder.build();
 
             self.ef = Some(ef);
@@ -404,7 +409,9 @@ impl ColumnarBlock {
 
         // compress N-positions (Elias-Fano encoded)
         if let Some(ef) = self.ef.as_ref() {
-            ef.serialize_into(&mut self.ef_bytes)?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            ef.serialize_into(&mut self.ef_bytes)
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.len_nef = self.ef_bytes.len();
             sized_compress(&mut self.z_npos, &self.ef_bytes, cctx)?;
         }
@@ -457,7 +464,9 @@ impl ColumnarBlock {
             self.ef_bytes.reserve(self.len_nef);
             copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
 
-            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.ef = Some(ef);
         }
 
@@ -624,7 +633,9 @@ impl ColumnarBlock {
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
 
             // reinitialize the EliasFano encoding
-            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.ef = Some(ef);
         }
 

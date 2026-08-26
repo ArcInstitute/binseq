@@ -16,9 +16,14 @@ jobs:
       - name: Build
         run: cargo build --verbose
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose --all-features
       - name: Run tests (release)
-        run: cargo test --verbose --release
+        run: cargo test --verbose --release --all-features
+      - name: Check feature matrix
+        run: |
+          cargo check --no-default-features
+          cargo check --no-default-features --features paraseq
+          cargo check --no-default-features --features anyhow
 
   fmt_lint:
     runs-on: ubuntu-latest
@@ -57,9 +62,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: run example (single) ${{ matrix.ext }}
-        run: cargo run --release --example auto-write -- ./data/subset_R1.fastq.gz -o ./output.${{ matrix.ext }}
+        run: cargo run --release --example auto-write -F paraseq -- ./data/subset_R1.fastq.gz -o ./output.${{ matrix.ext }}
       - name: run example (paired) ${{ matrix.ext }}
-        run: cargo run --release --example auto-write -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${{ matrix.ext }}
+        run: cargo run --release --example auto-write -F paraseq -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${{ matrix.ext }}
 
   example_read:
     runs-on: ubuntu-latest
