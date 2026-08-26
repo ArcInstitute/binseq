@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "binseq"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "bitnuc 0.4.1",
