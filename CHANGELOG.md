@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `error` test module was missing `#[cfg(test)]`, so a test-only enum compiled into release builds.
 - `cbq::Index::average_block_size` reports `0.0` instead of `NaN` for files with fewer than two blocks.
+- `encode_fastx` with single non-paired input no longer records second read's length as `xlen`
+  - made fixed-length BQ output look paired and fail on interleaved encoding.
+  - The extended length now only probes when builder is configured paired.
 
 ## [0.9.6] - 2026-08-12
 

@@ -57,9 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: run example (single) ${{ matrix.ext }}
-        run: cargo run --release --example write -- ./data/subset_R1.fastq.gz -o ./output.${{ matrix.ext }}
+        run: cargo run --release --example auto-write -- ./data/subset_R1.fastq.gz -o ./output.${{ matrix.ext }}
       - name: run example (paired) ${{ matrix.ext }}
-        run: cargo run --release --example write -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${{ matrix.ext }}
+        run: cargo run --release --example auto-write -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${{ matrix.ext }}
 
   example_read:
     runs-on: ubuntu-latest

@@ -189,14 +189,20 @@ impl FastxEncoderBuilder {
                 // build interleaved reader
                 let mut reader =
                     fastx::Reader::from_path(path).map_err(IntoBinseqError::into_binseq_error)?;
-                let (slen, xlen) = detect_seq_len(&mut reader, true)?;
+                // Only probe for an extended length when the writer is configured
+                // as paired (i.e. the single input is interleaved); otherwise a
+                // second read's length would mark fixed-length formats as paired.
+                let (slen, xlen) = detect_seq_len(&mut reader, self.builder.paired)?;
                 self.builder = self.builder.slen(slen as u32).xlen(xlen as u32);
                 (reader, None)
             }
             Some(FastxInput::Stdin) => {
                 let mut reader =
                     fastx::Reader::from_stdin().map_err(IntoBinseqError::into_binseq_error)?;
-                let (slen, xlen) = detect_seq_len(&mut reader, true)?;
+                // Only probe for an extended length when the writer is configured
+                // as paired (i.e. the single input is interleaved); otherwise a
+                // second read's length would mark fixed-length formats as paired.
+                let (slen, xlen) = detect_seq_len(&mut reader, self.builder.paired)?;
                 self.builder = self.builder.slen(slen as u32).xlen(xlen as u32);
                 (reader, None)
             }
