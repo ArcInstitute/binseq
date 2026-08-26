@@ -41,8 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FASTX encoding now drains only _completed_ blocks per batch and does a final drain per thread
   - CBQ blocks stay full across batches for better compression and less time under the global writer lock.
 - Dependencies: `byteorder` replaced with `std` little-endian conversions (byte-identical output), `num_cpus` replaced with `std::thread::available_parallelism`, `auto_impl` dropped, and `memchr` moved to dev-dependencies.
-- VBQ writer flushes a full block _before_ encoding the incoming record, so a policy-skipped record may close a block earlier;
-  - **the on-disk format is unchanged**.
 - Internal simplification:
   - one shared `bq`/`vbq` encoder
   - `BatchRecord` wraps `RefRecord`

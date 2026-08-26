@@ -430,6 +430,40 @@ impl<W: Write> Writer<W> {
         self.header.headers
     }
 
+    /// Flush the current block and record its range in the index.
+    ///
+    /// Free-standing over the individual fields so callers holding a borrow of
+    /// `self.encoder` (the encoded record buffers) can still flush.
+    fn flush_block_split(
+        inner: &mut W,
+        cblock: &mut BlockWriter,
+        ranges: &mut Vec<BlockRange>,
+        bytes_written: &mut usize,
+        records_written: &mut usize,
+    ) -> Result<()> {
+        let block_header = cblock.flush(inner)?;
+        ranges.push(BlockRange::new(
+            *bytes_written as u64,
+            block_header.size,
+            block_header.records,
+            *records_written as u64,
+        ));
+        *bytes_written += block_header.size_with_header();
+        *records_written += block_header.records as usize;
+        Ok(())
+    }
+
+    /// Flush the current block and record its range in the index
+    fn flush_block(&mut self) -> Result<()> {
+        Self::flush_block_split(
+            &mut self.inner,
+            &mut self.cblock,
+            &mut self.ranges,
+            &mut self.bytes_written,
+            &mut self.records_written,
+        )
+    }
+
     /// Writes a record using the unified [`SequencingRecord`] API
     ///
     /// This method provides a consistent interface with BQ and CBQ writers.
@@ -474,20 +508,6 @@ impl<W: Write> Writer<W> {
     /// writer.push(record).unwrap();
     /// writer.finish().unwrap();
     /// ```
-    /// Flush the current block and record its range in the index
-    fn flush_block(&mut self) -> Result<()> {
-        let block_header = self.cblock.flush(&mut self.inner)?;
-        self.ranges.push(BlockRange::new(
-            self.bytes_written as u64,
-            block_header.size,
-            block_header.records,
-            self.records_written as u64,
-        ));
-        self.bytes_written += block_header.size_with_header();
-        self.records_written += block_header.records as usize;
-        Ok(())
-    }
-
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
         // Check paired status - writer can require paired (record must have R2),
         // but if writer is single-end, we simply ignore any R2 data in the record.
@@ -527,11 +547,6 @@ impl<W: Write> Writer<W> {
             self.header.bits,
         );
 
-        // flush the current block first if this record would overflow it
-        if self.cblock.exceeds_block_size(record_size)? {
-            self.flush_block()?;
-        }
-
         // encode the sequence(s); a `None` means the record was skipped by policy
         let encoded = if self.header.is_paired() {
             self.encoder
@@ -545,6 +560,19 @@ impl<W: Write> Writer<W> {
         let Some((sbuffer, xbuffer)) = encoded else {
             return Ok(false);
         };
+
+        // flush the current block if this record would overflow it; done only
+        // once we know the record will actually be written, so policy-skipped
+        // records never fragment blocks (split-borrow: `encoded` holds the encoder)
+        if self.cblock.exceeds_block_size(record_size)? {
+            Self::flush_block_split(
+                &mut self.inner,
+                &mut self.cblock,
+                &mut self.ranges,
+                &mut self.bytes_written,
+                &mut self.records_written,
+            )?;
+        }
 
         self.cblock.write_record(&record, sbuffer, xbuffer)?;
         Ok(true)
@@ -1047,6 +1075,37 @@ mod tests {
     use crate::SequencingRecordBuilder;
     use crate::utils::read_u64_le;
     use crate::vbq::{FileHeaderBuilder, header::SIZE_HEADER};
+
+    #[test]
+    fn test_policy_skipped_records_do_not_fragment_blocks() -> super::Result<()> {
+        // Two writers fed the same valid records must produce identical output,
+        // even when one is also fed invalid (policy-skipped) records that would
+        // overflow the current block: a skipped record must never trigger a flush.
+        let header = FileHeaderBuilder::new().block(2048).build();
+        let mut plain = WriterBuilder::default().header(header).build(Vec::new())?;
+        let mut skipped = WriterBuilder::default().header(header).build(Vec::new())?;
+
+        let valid = b"ACGT".repeat(25); // 100 bp
+        let invalid = b"N".repeat(300); // always skipped by IgnoreSequence
+        for _ in 0..200 {
+            let invalid_record = SequencingRecordBuilder::default()
+                .s_seq(&invalid)
+                .build()?;
+            assert!(!skipped.push(invalid_record)?);
+
+            let valid_record = SequencingRecordBuilder::default().s_seq(&valid).build()?;
+            assert!(plain.push(valid_record)?);
+            let valid_record = SequencingRecordBuilder::default().s_seq(&valid).build()?;
+            assert!(skipped.push(valid_record)?);
+        }
+        plain.finish()?;
+        skipped.finish()?;
+
+        assert!(plain.ranges.len() > 1, "test should span multiple blocks");
+        assert_eq!(plain.ranges.len(), skipped.ranges.len());
+        assert_eq!(plain.inner, skipped.inner);
+        Ok(())
+    }
 
     #[test]
     fn test_headless_writer() -> super::Result<()> {
