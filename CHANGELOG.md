@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-25
+
+- Large cleanup of internal and public API.
+- Runtime dependencies removed (`byteorder`, `num_cpus`, `auto_impl`, and `memchr`).
+- Deprecated items removed from the public API.
+
+### Removed
+
+- **`bq::StreamWriter` / `bq::StreamWriterBuilder`**
+  - pure delegating wrappers; compose `bq::WriterBuilder` with `std::io::BufWriter` instead (see the `network_streaming` example).
+- **Deprecated `write_record` / `write_paired_record`** on the `bq` and `vbq` writers
+  - use `push(SequencingRecord)`.
+- **`bq::Encoder`** from the public API
+  - `bq` and `vbq` now share one internal encoder;
+  - sequence-length validation happens in `bq::Writer::push`.
+- **`vbq::BlockIndex::from_vbq`**
+  - indexes are embedded in VBQ files - removing this holdover from way back when;
+  - use `MmapReader::load_index`.
+- **Redundant header constructors**
+  - `bq::FileHeader::{new, new_extended, set_bitsize}` and `vbq::FileHeader::{new, with_capacity, set_bitsize}`;
+  - use the `FileHeaderBuilder`s.
+- **Never-constructed error variants**
+  - the five `WriteError` flag-mismatch variants and `CbqError::MissingSequenceOnSequencingRecord`;
+  - `BuilderError` folds into `HeaderError::MissingSequenceLength` and `FastxEncodingError` into `WriteError`.
+- **`&R` / `&mut R` impls of `BinseqRecord`**
+  - the `auto_impl` dependency is dropped and nothing used the reference impls;
+  - pass records by value (they are already references anyways).
+- Dead accessors throughout (`RefRecord::{config, set_id}`, `cbq` writer `usage` / `bytes_written`, and similar zero-caller items), plus the redundant `streaming` and `write` examples.
+
+### Changed
+
+- `SequencingRecord` fields are now public and the getters are removed
+- FASTX encoding now drains only _completed_ blocks per batch and does a final drain per thread
+  - CBQ blocks stay full across batches for better compression and less time under the global writer lock.
+- Dependencies: `byteorder` replaced with `std` little-endian conversions (byte-identical output), `num_cpus` replaced with `std::thread::available_parallelism`, `auto_impl` dropped, and `memchr` moved to dev-dependencies.
+- The `paraseq` feature is no longer enabled by default, reducing compile times when FASTX encoding is not needed. Enable it with `features = ["paraseq"]` to use `encode_fastx` (which remains visible on docs.rs with a feature banner).
+- `anyhow` is now actually an optional dependency:
+  - the CBQ Elias-Fano codec is handled directly without the auto-derive from thiserror
+  - fixes the optional feature which actually never compiled when disabled.
+- Internal simplification:
+  - one shared `bq`/`vbq` encoder
+  - `BatchRecord` wraps `RefRecord`
+  - `cbq` `Span` replaced by `Range<usize>`
+  - unreachable `pub` items demoted to `pub(crate)`.
+
+### Fixed
+
+- The `error` test module was missing `#[cfg(test)]`, so a test-only enum compiled into release builds.
+- `cbq::Index::average_block_size` reports `0.0` instead of `NaN` for files with fewer than two blocks.
+- `encode_fastx` with single non-paired input no longer records second read's length as `xlen`
+  - made fixed-length BQ output look paired and fail on interleaved encoding.
+  - The extended length now only probes when builder is configured paired.
+
 ## [0.9.6] - 2026-08-12
 
 ### Changed

@@ -5,10 +5,12 @@
 //! sequence length, and other information necessary for proper interpretation of the data.
 
 use bitnuc_deprec::BitSize;
-use byteorder::{ByteOrder, LittleEndian};
 use std::io::{Read, Write};
 
-use crate::error::{BuilderError, HeaderError, Result};
+use crate::{
+    error::{HeaderError, Result},
+    utils::read_u32_le,
+};
 
 /// Current magic number: "BSEQ" in ASCII (in little-endian byte order)
 ///
@@ -86,7 +88,7 @@ impl FileHeaderBuilder {
             slen: if let Some(slen) = self.slen {
                 slen
             } else {
-                return Err(BuilderError::MissingSlen.into());
+                return Err(HeaderError::MissingSequenceLength.into());
             },
             xlen: self.xlen.unwrap_or(0),
             bits: self.bitsize.unwrap_or_default(),
@@ -141,67 +143,6 @@ pub struct FileHeader {
     pub reserved: [u8; 17],
 }
 impl FileHeader {
-    /// Creates a new header with the specified sequence length
-    ///
-    /// This constructor initializes a standard header with the given sequence length,
-    /// setting the magic number and format version to their default values.
-    /// The extended sequence length (xlen) is set to 0.
-    ///
-    /// # Arguments
-    ///
-    /// * `bits` - The number of bits per nucleotide (currently 2 or 4)
-    /// * `slen` - The length of sequences in the file
-    /// * `flags` - The flags for the header
-    ///
-    /// # Returns
-    ///
-    /// A new `FileHeader` instance
-    #[must_use]
-    pub fn new(bits: BitSize, slen: u32, flags: bool) -> Self {
-        Self {
-            magic: MAGIC,
-            format: FORMAT,
-            slen,
-            xlen: 0,
-            bits,
-            flags,
-            reserved: RESERVED,
-        }
-    }
-
-    /// Creates a new header with both primary and extended sequence lengths
-    ///
-    /// This constructor initializes a header for files that contain both primary
-    /// and secondary sequence data, such as quality scores or annotations.
-    ///
-    /// # Arguments
-    ///
-    /// * `bits` - The number of bits per nucleotide (currently 2 or 4)
-    /// * `slen` - The length of primary sequences in the file
-    /// * `xlen` - The length of secondary/extended sequences in the file
-    /// * `flags` - The flags for the header
-    ///
-    /// # Returns
-    ///
-    /// A new `FileHeader` instance with extended sequence information
-    #[must_use]
-    pub fn new_extended(bits: BitSize, slen: u32, xlen: u32, flags: bool) -> Self {
-        Self {
-            magic: MAGIC,
-            format: FORMAT,
-            slen,
-            xlen,
-            bits,
-            flags,
-            reserved: RESERVED,
-        }
-    }
-
-    /// Sets the bitsize of the header
-    pub fn set_bitsize(&mut self, bits: BitSize) {
-        self.bits = bits;
-    }
-
     /// Checks if the file is paired
     #[must_use]
     pub fn is_paired(&self) -> bool {
@@ -229,7 +170,7 @@ impl FileHeader {
     /// * The format version is unsupported
     /// * The reserved bytes are invalid
     pub fn from_bytes(buffer: &[u8; SIZE_HEADER]) -> Result<Self> {
-        let magic = LittleEndian::read_u32(&buffer[0..4]);
+        let magic = read_u32_le(&buffer[0..4]);
         if magic != MAGIC {
             return Err(HeaderError::InvalidMagicNumber(magic).into());
         }
@@ -237,8 +178,8 @@ impl FileHeader {
         if format != FORMAT {
             return Err(HeaderError::InvalidFormatVersion(format).into());
         }
-        let slen = LittleEndian::read_u32(&buffer[5..9]);
-        let xlen = LittleEndian::read_u32(&buffer[9..13]);
+        let slen = read_u32_le(&buffer[5..9]);
+        let xlen = read_u32_le(&buffer[9..13]);
         let bits = match buffer[13] {
             0 | 2 | 42 => BitSize::Two,
             4 => BitSize::Four,
@@ -307,10 +248,10 @@ impl FileHeader {
     /// Returns an error if writing to the writer fails (typically an I/O error).
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_HEADER];
-        LittleEndian::write_u32(&mut buffer[0..4], self.magic);
+        buffer[0..4].copy_from_slice(&self.magic.to_le_bytes());
         buffer[4] = self.format;
-        LittleEndian::write_u32(&mut buffer[5..9], self.slen);
-        LittleEndian::write_u32(&mut buffer[9..13], self.xlen);
+        buffer[5..9].copy_from_slice(&self.slen.to_le_bytes());
+        buffer[9..13].copy_from_slice(&self.xlen.to_le_bytes());
         buffer[13] = self.bits.into();
         buffer[14] = self.flags.into();
         buffer[15..32].copy_from_slice(&self.reserved);
@@ -373,38 +314,11 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ==================== FileHeader Constructor Tests ====================
-
-    #[test]
-    fn test_header_new() {
-        let header = FileHeader::new(BitSize::Two, 100, true);
-        assert_eq!(header.slen, 100);
-        assert_eq!(header.xlen, 0);
-        assert!(header.flags);
-        assert!(!header.is_paired());
-    }
-
-    #[test]
-    fn test_header_new_extended() {
-        let header = FileHeader::new_extended(BitSize::Four, 100, 50, false);
-        assert_eq!(header.slen, 100);
-        assert_eq!(header.xlen, 50);
-        assert_eq!(header.bits, BitSize::Four);
-        assert!(header.is_paired());
-    }
-
-    #[test]
-    fn test_set_bitsize() {
-        let mut header = FileHeader::new(BitSize::Two, 100, false);
-        header.set_bitsize(BitSize::Four);
-        assert_eq!(header.bits, BitSize::Four);
-    }
-
     // ==================== from_bytes Tests ====================
 
     #[test]
     fn test_from_bytes_invalid_format_version() {
-        let header = FileHeader::new(BitSize::Two, 32, false);
+        let header = FileHeaderBuilder::new().slen(32).build().unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -415,7 +329,11 @@ mod tests {
 
     #[test]
     fn test_from_bytes_four_bit_size() {
-        let header = FileHeader::new(BitSize::Four, 32, false);
+        let header = FileHeaderBuilder::new()
+            .bitsize(BitSize::Four)
+            .slen(32)
+            .build()
+            .unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -425,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_from_bytes_invalid_bitsize() {
-        let header = FileHeader::new(BitSize::Two, 32, false);
+        let header = FileHeaderBuilder::new().slen(32).build().unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -452,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_from_buffer_valid() {
-        let header = FileHeader::new(BitSize::Two, 32, false);
+        let header = FileHeaderBuilder::new().slen(32).build().unwrap();
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
         buffer.extend_from_slice(&[0u8; 16]); // trailing data beyond header
@@ -464,7 +382,12 @@ mod tests {
 
     #[test]
     fn test_from_reader_valid() {
-        let header = FileHeader::new_extended(BitSize::Two, 32, 16, true);
+        let header = FileHeaderBuilder::new()
+            .slen(32)
+            .xlen(16)
+            .flags(true)
+            .build()
+            .unwrap();
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
         let mut cursor = std::io::Cursor::new(buffer);

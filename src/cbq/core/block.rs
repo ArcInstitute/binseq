@@ -10,7 +10,7 @@ use crate::cbq::core::utils::sized_compress;
 use crate::error::{CbqError, WriteError};
 use crate::{BinseqRecord, BitSize, DEFAULT_QUALITY_SCORE, Result};
 
-use super::utils::{Span, calculate_offsets, extension_read, resize_uninit, slice_and_increment};
+use super::utils::{calculate_offsets, extension_read, resize_uninit, slice_and_increment, span};
 use super::{BlockHeader, BlockRange, FileHeader};
 use crate::SequencingRecord;
 
@@ -70,8 +70,6 @@ pub struct ColumnarBlock {
 
     /// Total nucleotides in this block
     pub(crate) nuclen: usize,
-    /// Number of npos positions
-    pub(crate) num_npos: usize,
     /// Current size of this block (virtual)
     current_size: usize,
 
@@ -113,7 +111,6 @@ impl ColumnarBlock {
             self.num_sequences = 0;
             self.num_records = 0;
             self.current_size = 0;
-            self.num_npos = 0;
             self.len_nef = 0;
         }
 
@@ -220,7 +217,7 @@ impl ColumnarBlock {
     /// Note: this does not check if quality scores are different lengths from sequence
     fn add_quality(&mut self, record: &SequencingRecord) -> Result<()> {
         if self.header.has_qualities() {
-            let Some(squal) = record.s_qual() else {
+            let Some(squal) = record.s_qual else {
                 return Err(WriteError::ConfigurationMismatch {
                     attribute: "s_qual",
                     expected: true,
@@ -231,7 +228,7 @@ impl ColumnarBlock {
             self.qual.extend_from_slice(squal);
 
             if self.header.is_paired() {
-                let Some(xqual) = record.x_qual() else {
+                let Some(xqual) = record.x_qual else {
                     return Err(WriteError::ConfigurationMismatch {
                         attribute: "x_qual",
                         expected: true,
@@ -369,15 +366,19 @@ impl ColumnarBlock {
     /// Find all positions of 'N' in the sequence
     fn fill_npos(&mut self) -> Result<()> {
         bitnuc::ambiguous_bases(&self.seq, &mut self.npos);
-        self.num_npos = self.npos.len();
 
         // build Elias-Fano encoding for N positions
         if self.npos.is_empty() {
             self.ef = None;
             Ok(())
         } else {
-            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())?;
-            ef_builder.extend(self.npos.iter().map(|idx| *idx as usize))?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            let mut ef_builder = EliasFanoBuilder::new(self.seq.len(), self.npos.len())
+                .map_err(|e| e.into_boxed_dyn_error())?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            ef_builder
+                .extend(self.npos.iter().map(|idx| *idx as usize))
+                .map_err(|e| e.into_boxed_dyn_error())?;
             let ef = ef_builder.build();
 
             self.ef = Some(ef);
@@ -408,7 +409,9 @@ impl ColumnarBlock {
 
         // compress N-positions (Elias-Fano encoded)
         if let Some(ef) = self.ef.as_ref() {
-            ef.serialize_into(&mut self.ef_bytes)?;
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            ef.serialize_into(&mut self.ef_bytes)
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.len_nef = self.ef_bytes.len();
             sized_compress(&mut self.z_npos, &self.ef_bytes, cctx)?;
         }
@@ -461,8 +464,9 @@ impl ColumnarBlock {
             self.ef_bytes.reserve(self.len_nef);
             copy_decode(self.z_npos.as_slice(), &mut self.ef_bytes)?;
 
-            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
-            self.num_npos = ef.len();
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.ef = Some(ef);
         }
 
@@ -629,8 +633,9 @@ impl ColumnarBlock {
             .map_err(|e| io::Error::other(zstd_safe::get_error_name(e)))?;
 
             // reinitialize the EliasFano encoding
-            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())?;
-            self.num_npos = ef.len();
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            let ef = EliasFano::deserialize_from(self.ef_bytes.as_slice())
+                .map_err(|e| e.into_boxed_dyn_error())?;
             self.ef = Some(ef);
         }
 
@@ -773,10 +778,9 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 self.index
             };
 
-            let sseq_span =
-                Span::new_u64(self.block.l_seq_offsets[seq_idx], self.block.l_seq[seq_idx]);
+            let sseq_span = span(self.block.l_seq_offsets[seq_idx], self.block.l_seq[seq_idx]);
             let sheader_span = if self.has_headers {
-                Some(Span::new_u64(
+                Some(span(
                     self.block.l_header_offsets[seq_idx],
                     self.block.l_headers[seq_idx],
                 ))
@@ -784,7 +788,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 None
             };
             let xseq_span = if self.is_paired {
-                Some(Span::new_u64(
+                Some(span(
                     self.block.l_seq_offsets[seq_idx + 1],
                     self.block.l_seq[seq_idx + 1],
                 ))
@@ -792,7 +796,7 @@ impl<'a> Iterator for RefRecordIter<'a> {
                 None
             };
             let xheader_span = if self.is_paired && self.has_headers {
-                Some(Span::new_u64(
+                Some(span(
                     self.block.l_header_offsets[seq_idx + 1],
                     self.block.l_headers[seq_idx + 1],
                 ))
@@ -847,7 +851,7 @@ impl RefRecordIndex {
 }
 
 /// A reference to a record in a [`ColumnarBlock`](crate::cbq::ColumnarBlock) that implements the [`BinseqRecord`](crate::BinseqRecord) trait
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RefRecord<'a> {
     /// A reference to the block containing this record
     block: &'a ColumnarBlock,
@@ -862,16 +866,16 @@ pub struct RefRecord<'a> {
     global_index: usize,
 
     /// Span of the primary sequence within the block
-    sseq_span: Span,
+    sseq_span: std::ops::Range<usize>,
 
     /// Span of the extended sequence within the block
-    xseq_span: Option<Span>,
+    xseq_span: Option<std::ops::Range<usize>>,
 
     /// Span of the primary header within the block
-    sheader_span: Option<Span>,
+    sheader_span: Option<std::ops::Range<usize>>,
 
     /// Span of the extended header within the block
-    xheader_span: Option<Span>,
+    xheader_span: Option<std::ops::Range<usize>>,
 
     /// A buffer to the name of this record when not storing headers
     rr_index: RefRecordIndex,
@@ -894,16 +898,16 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn sheader(&self) -> &[u8] {
-        if let Some(span) = self.sheader_span {
-            &self.block.headers[span.range()]
+        if let Some(span) = &self.sheader_span {
+            &self.block.headers[span.clone()]
         } else {
             self.rr_index.as_bytes()
         }
     }
 
     fn xheader(&self) -> &[u8] {
-        if let Some(span) = self.xheader_span {
-            &self.block.headers[span.range()]
+        if let Some(span) = &self.xheader_span {
+            &self.block.headers[span.clone()]
         } else {
             self.rr_index.as_bytes()
         }
@@ -922,7 +926,7 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn xlen(&self) -> u64 {
-        self.xseq_span.map_or(0, |span| span.len() as u64)
+        self.xseq_span.as_ref().map_or(0, |span| span.len() as u64)
     }
 
     fn decode_s(&self, buf: &mut Vec<u8>) -> crate::Result<()> {
@@ -936,12 +940,17 @@ impl BinseqRecord for RefRecord<'_> {
     }
 
     fn sseq(&self) -> &[u8] {
-        &self.block.seq[self.sseq_span.range()]
+        self.block
+            .seq
+            .get(self.sseq_span.clone())
+            .unwrap_or_default()
     }
 
     fn xseq(&self) -> &[u8] {
         self.xseq_span
-            .map_or(&[], |span| &self.block.seq[span.range()])
+            .as_ref()
+            .and_then(|span| self.block.seq.get(span.clone()))
+            .unwrap_or_default()
     }
 
     fn has_quality(&self) -> bool {
@@ -950,7 +959,7 @@ impl BinseqRecord for RefRecord<'_> {
 
     fn squal(&self) -> &[u8] {
         if self.has_quality() {
-            &self.block.qual[self.sseq_span.range()]
+            &self.block.qual[self.sseq_span.clone()]
         } else {
             &self.qbuf[..self.slen() as usize]
         }
@@ -958,9 +967,9 @@ impl BinseqRecord for RefRecord<'_> {
 
     fn xqual(&self) -> &[u8] {
         if self.has_quality()
-            && let Some(span) = self.xseq_span
+            && let Some(span) = &self.xseq_span
         {
-            &self.block.qual[span.range()]
+            &self.block.qual[span.clone()]
         } else {
             &self.qbuf[..self.xlen() as usize]
         }

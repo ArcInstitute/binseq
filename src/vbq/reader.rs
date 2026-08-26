@@ -54,8 +54,8 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::utils::read_u64_le;
 use bitnuc_deprec::BitSize;
-use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
 use zstd::zstd_safe;
 
@@ -82,16 +82,22 @@ use crate::{
 /// # Returns
 ///
 /// The number of 64-bit words required to encode the sequence
-fn encoded_sequence_len(len: u64, bitsize: BitSize) -> usize {
+/// Number of bases packed into each u64 word for the given bitsize
+fn bases_per_word(bitsize: BitSize) -> usize {
     match bitsize {
-        BitSize::Two => len.div_ceil(32) as usize,
-        BitSize::Four => len.div_ceil(16) as usize,
+        BitSize::Two => 32,
+        BitSize::Four => 16,
     }
+}
+
+/// Number of u64 words needed to store `len` bases at the given bitsize
+fn encoded_sequence_len(len: u64, bitsize: BitSize) -> usize {
+    len.div_ceil(bases_per_word(bitsize) as u64) as usize
 }
 
 /// Represents a span (offset, length) into a buffer
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Span {
+pub(crate) struct Span {
     offset: usize,
     len: usize,
 }
@@ -370,7 +376,7 @@ impl RecordBlock {
 
             // Read flag
             let flag = if has_flags {
-                let flag = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+                let flag = read_u64_le(&bytes[pos..pos + 8]);
                 pos += 8;
                 Some(flag)
             } else {
@@ -378,9 +384,9 @@ impl RecordBlock {
             };
 
             // Read lengths
-            let slen = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+            let slen = read_u64_le(&bytes[pos..pos + 8]);
             pos += 8;
-            let xlen = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+            let xlen = read_u64_le(&bytes[pos..pos + 8]);
             pos += 8;
 
             // Check for end of records
@@ -395,7 +401,7 @@ impl RecordBlock {
             // Primary sequence - store span into sequences Vec
             let s_seq_span = Span::new(self.sequences.len(), s_seq_words);
             for _ in 0..s_seq_words {
-                let val = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+                let val = read_u64_le(&bytes[pos..pos + 8]);
                 self.sequences.push(val);
                 pos += 8;
             }
@@ -411,7 +417,7 @@ impl RecordBlock {
 
             // Primary header - store span into rbuf
             let s_header_span = if has_header {
-                let header_len = LittleEndian::read_u64(&bytes[pos..pos + 8]) as usize;
+                let header_len = read_u64_le(&bytes[pos..pos + 8]) as usize;
                 pos += 8;
                 let span = Span::new(pos, header_len);
                 pos += header_len;
@@ -423,7 +429,7 @@ impl RecordBlock {
             // Extended sequence - store span into sequences Vec
             let x_seq_span = Span::new(self.sequences.len(), x_seq_words);
             for _ in 0..x_seq_words {
-                let val = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+                let val = read_u64_le(&bytes[pos..pos + 8]);
                 self.sequences.push(val);
                 pos += 8;
             }
@@ -439,7 +445,7 @@ impl RecordBlock {
 
             // Extended header - store span into rbuf
             let x_header_span = if has_header && xlen > 0 {
-                let header_len = LittleEndian::read_u64(&bytes[pos..pos + 8]) as usize;
+                let header_len = read_u64_le(&bytes[pos..pos + 8]) as usize;
                 pos += 8;
                 let span = Span::new(pos, header_len);
                 pos += header_len;
@@ -496,24 +502,21 @@ impl RecordBlock {
         Ok(())
     }
 
+    /// Slice the decoded buffer for a record given a word span and base length
+    fn decoded(&self, word_offset: usize, len: usize) -> Option<&[u8]> {
+        if self.dbuf.is_empty() {
+            return None;
+        }
+        // Calculate offset in decoded buffer (accounting for padding)
+        let offset = word_offset * bases_per_word(self.bitsize);
+        self.dbuf.get(offset..offset + len)
+    }
+
     /// Get decoded primary sequence for a record by index
     #[must_use]
     pub fn get_decoded_s(&self, record_idx: usize) -> Option<&[u8]> {
         let meta = self.records.get(record_idx)?;
-        if self.dbuf.is_empty() {
-            return None;
-        }
-
-        let bases_per_word = match self.bitsize {
-            BitSize::Two => 32,
-            BitSize::Four => 16,
-        };
-
-        // Calculate offset in decoded buffer (accounting for padding)
-        let offset = meta.s_seq_span.offset * bases_per_word;
-        let len = meta.slen as usize;
-
-        Some(&self.dbuf[offset..offset + len])
+        self.decoded(meta.s_seq_span.offset, meta.slen as usize)
     }
 
     /// Get decoded extended sequence for a record by index
@@ -523,19 +526,7 @@ impl RecordBlock {
         if meta.xlen == 0 {
             return Some(&[]);
         }
-        if self.dbuf.is_empty() {
-            return None;
-        }
-
-        let bases_per_word = match self.bitsize {
-            BitSize::Two => 32,
-            BitSize::Four => 16,
-        };
-
-        let offset = meta.x_seq_span.offset * bases_per_word;
-        let len = meta.xlen as usize;
-
-        Some(&self.dbuf[offset..offset + len])
+        self.decoded(meta.x_seq_span.offset, meta.xlen as usize)
     }
 }
 
@@ -1077,13 +1068,13 @@ impl MmapReader {
         let start_pos_index_size = start_pos_magic - 8;
 
         // Validate the magic number
-        let magic = LittleEndian::read_u64(&self.mmap[start_pos_magic..]);
+        let magic = read_u64_le(&self.mmap[start_pos_magic..]);
         if magic != INDEX_END_MAGIC {
             return Err(ReadError::MissingIndexEndMagic.into());
         }
 
         // Get the index size
-        let index_size = LittleEndian::read_u64(&self.mmap[start_pos_index_size..start_pos_magic]);
+        let index_size = read_u64_le(&self.mmap[start_pos_index_size..start_pos_magic]);
 
         // Determine the start position of the index bytes
         let start_pos_index = start_pos_index_size - index_size as usize;
@@ -1236,11 +1227,7 @@ impl ParallelReader for MmapReader {
         range: Range<usize>,
     ) -> Result<()> {
         // Calculate the number of threads to use
-        let num_threads = if num_threads == 0 {
-            num_cpus::get()
-        } else {
-            num_threads.min(num_cpus::get())
-        };
+        let num_threads = crate::parallel::clamp_threads(num_threads);
 
         // Generate or load the index first
         let index = self.load_index()?;

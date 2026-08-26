@@ -64,16 +64,13 @@
 
 use std::io::Write;
 
-use bitnuc_deprec::BitSize;
-use byteorder::{LittleEndian, WriteBytesExt};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 use zstd::stream::copy_encode;
 
 use super::header::{BlockHeader, FileHeader};
 use crate::SequencingRecord;
+use crate::encoder::Encoder;
 use crate::error::{Result, WriteError};
-use crate::policy::{Policy, RNG_SEED};
+use crate::policy::Policy;
 use crate::vbq::header::{SIZE_BLOCK_HEADER, SIZE_HEADER};
 use crate::vbq::index::{INDEX_END_MAGIC, IndexHeader};
 use crate::vbq::{BlockIndex, BlockRange};
@@ -393,7 +390,7 @@ impl<W: Write> Writer<W> {
 
     /// Returns the N-policy of the writer
     pub fn policy(&self) -> Policy {
-        self.encoder.policy
+        self.encoder.policy()
     }
 
     /// Checks if the writer is configured for quality scores
@@ -433,47 +430,45 @@ impl<W: Write> Writer<W> {
         self.header.headers
     }
 
-    #[deprecated(note = "use `push` method with SequencingRecord instead")]
-    pub fn write_record(
-        &mut self,
-        flag: Option<u64>,
-        header: Option<&[u8]>,
-        sequence: &[u8],
-        quality: Option<&[u8]>,
-    ) -> Result<bool> {
-        let record = SequencingRecord::new(sequence, quality, header, None, None, None, flag);
-        self.push(record)
+    /// Flush the current block and record its range in the index.
+    ///
+    /// Free-standing over the individual fields so callers holding a borrow of
+    /// `self.encoder` (the encoded record buffers) can still flush.
+    fn flush_block_split(
+        inner: &mut W,
+        cblock: &mut BlockWriter,
+        ranges: &mut Vec<BlockRange>,
+        bytes_written: &mut usize,
+        records_written: &mut usize,
+    ) -> Result<()> {
+        let block_header = cblock.flush(inner)?;
+        ranges.push(BlockRange::new(
+            *bytes_written as u64,
+            block_header.size,
+            block_header.records,
+            *records_written as u64,
+        ));
+        *bytes_written += block_header.size_with_header();
+        *records_written += block_header.records as usize;
+        Ok(())
     }
 
-    #[deprecated(note = "use `push` method with SequencingRecord instead")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn write_paired_record(
-        &mut self,
-        flag: Option<u64>,
-        s_header: Option<&[u8]>,
-        s_sequence: &[u8],
-        s_qual: Option<&[u8]>,
-        x_header: Option<&[u8]>,
-        x_sequence: &[u8],
-        x_qual: Option<&[u8]>,
-    ) -> Result<bool> {
-        let record = SequencingRecord::new(
-            s_sequence,
-            s_qual,
-            s_header,
-            Some(x_sequence),
-            x_qual,
-            x_header,
-            flag,
-        );
-        self.push(record)
+    /// Flush the current block and record its range in the index
+    fn flush_block(&mut self) -> Result<()> {
+        Self::flush_block_split(
+            &mut self.inner,
+            &mut self.cblock,
+            &mut self.ranges,
+            &mut self.bytes_written,
+            &mut self.records_written,
+        )
     }
 
     /// Writes a record using the unified [`SequencingRecord`] API
     ///
     /// This method provides a consistent interface with BQ and CBQ writers.
-    /// It automatically routes to either `write_record` or `write_paired_record`
-    /// based on whether the record contains paired data.
+    /// It automatically routes to the single or paired write path based on
+    /// whether the record contains paired data.
     ///
     /// # Arguments
     ///
@@ -552,46 +547,35 @@ impl<W: Write> Writer<W> {
             self.header.bits,
         );
 
-        if self.header.is_paired() {
-            // encode the sequences
-            if let Some((sbuffer, xbuffer)) = self
-                .encoder
+        // encode the sequence(s); a `None` means the record was skipped by policy
+        let encoded = if self.header.is_paired() {
+            self.encoder
                 .encode_paired(record.s_seq, record.x_seq.unwrap_or_default())?
-            {
-                if self.cblock.exceeds_block_size(record_size)? {
-                    impl_flush_block(
-                        &mut self.inner,
-                        &mut self.cblock,
-                        &mut self.ranges,
-                        &mut self.bytes_written,
-                        &mut self.records_written,
-                    )?;
-                }
-
-                self.cblock.write_record(&record, sbuffer, Some(xbuffer))?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+                .map(|(sbuffer, xbuffer)| (sbuffer, Some(xbuffer)))
         } else {
-            // encode the sequence
-            if let Some(sbuffer) = self.encoder.encode_single(record.s_seq)? {
-                if self.cblock.exceeds_block_size(record_size)? {
-                    impl_flush_block(
-                        &mut self.inner,
-                        &mut self.cblock,
-                        &mut self.ranges,
-                        &mut self.bytes_written,
-                        &mut self.records_written,
-                    )?;
-                }
+            self.encoder
+                .encode_single(record.s_seq)?
+                .map(|sbuffer| (sbuffer, None))
+        };
+        let Some((sbuffer, xbuffer)) = encoded else {
+            return Ok(false);
+        };
 
-                self.cblock.write_record(&record, sbuffer, None)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+        // flush the current block if this record would overflow it; done only
+        // once we know the record will actually be written, so policy-skipped
+        // records never fragment blocks (split-borrow: `encoded` holds the encoder)
+        if self.cblock.exceeds_block_size(record_size)? {
+            Self::flush_block_split(
+                &mut self.inner,
+                &mut self.cblock,
+                &mut self.ranges,
+                &mut self.bytes_written,
+                &mut self.records_written,
+            )?;
         }
+
+        self.cblock.write_record(&record, sbuffer, xbuffer)?;
+        Ok(true)
     }
 
     /// Finishes writing and flushes all data to the underlying writer
@@ -632,13 +616,7 @@ impl<W: Write> Writer<W> {
     /// ```
     pub fn finish(&mut self) -> Result<()> {
         // Flush any remaining data in the current block
-        impl_flush_block(
-            &mut self.inner,
-            &mut self.cblock,
-            &mut self.ranges,
-            &mut self.bytes_written,
-            &mut self.records_written,
-        )?;
+        self.flush_block()?;
         self.inner.flush()?;
 
         // Always write the index - this is critical for VBQ file validity
@@ -764,7 +742,7 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    pub fn write_index(&mut self) -> Result<()> {
+    fn write_index(&mut self) -> Result<()> {
         // Build the index
         let index_header = IndexHeader::new(self.bytes_written as u64);
         let block_index = BlockIndex {
@@ -783,33 +761,13 @@ impl<W: Write> Writer<W> {
         self.inner.write_all(&buffer)?;
 
         // Write the number of bytes written to the index
-        self.inner.write_u64::<LittleEndian>(n_bytes)?;
+        self.inner.write_all(&n_bytes.to_le_bytes())?;
 
         // Write the index footer magic
-        self.inner.write_u64::<LittleEndian>(INDEX_END_MAGIC)?;
+        self.inner.write_all(&INDEX_END_MAGIC.to_le_bytes())?;
 
         Ok(())
     }
-}
-
-fn impl_flush_block<W: Write>(
-    writer: &mut W,
-    cblock: &mut BlockWriter,
-    ranges: &mut Vec<BlockRange>,
-    bytes_written: &mut usize,
-    records_written: &mut usize,
-) -> Result<()> {
-    let block_header = cblock.flush(writer)?;
-    let range = BlockRange::new(
-        *bytes_written as u64,
-        block_header.size,
-        block_header.records,
-        *records_written as u64,
-    );
-    ranges.push(range);
-    *bytes_written += block_header.size_with_header();
-    *records_written += block_header.records as usize;
-    Ok(())
 }
 
 impl<W: Write> Drop for Writer<W> {
@@ -938,20 +896,20 @@ impl BlockWriter {
     }
 
     fn write_flag(&mut self, flag: u64) -> Result<()> {
-        self.ubuf.write_u64::<LittleEndian>(flag)?;
+        self.ubuf.write_all(&flag.to_le_bytes())?;
         self.pos += 8;
         Ok(())
     }
 
     fn write_length(&mut self, length: u64) -> Result<()> {
-        self.ubuf.write_u64::<LittleEndian>(length)?;
+        self.ubuf.write_all(&length.to_le_bytes())?;
         self.pos += 8;
         Ok(())
     }
 
     fn write_buffer(&mut self, ebuf: &[u64]) -> Result<()> {
         ebuf.iter()
-            .try_for_each(|&x| self.ubuf.write_u64::<LittleEndian>(x))?;
+            .try_for_each(|&x| self.ubuf.write_all(&x.to_le_bytes()))?;
         self.pos += 8 * ebuf.len();
         Ok(())
     }
@@ -1111,104 +1069,41 @@ impl BlockWriter {
     }
 }
 
-/// Encapsulates the logic for encoding sequences into a binary format.
-#[derive(Clone)]
-pub struct Encoder {
-    /// Bitsize of the nucleotides
-    bitsize: BitSize,
-
-    /// Reusable buffers for all nucleotides (written as 2-bit after conversion)
-    sbuffer: Vec<u64>,
-    xbuffer: Vec<u64>,
-
-    /// Reusable buffers for invalid nucleotide sequences
-    s_ibuf: Vec<u8>,
-    x_ibuf: Vec<u8>,
-
-    /// Invalid Nucleotide Policy
-    policy: Policy,
-
-    /// Random Number Generator
-    rng: SmallRng,
-}
-
-impl Encoder {
-    /// Initialize a new encoder with the given policy.
-    pub fn with_policy(bitsize: BitSize, policy: Policy) -> Self {
-        Self {
-            bitsize,
-            policy,
-            sbuffer: Vec::default(),
-            xbuffer: Vec::default(),
-            s_ibuf: Vec::default(),
-            x_ibuf: Vec::default(),
-            rng: SmallRng::seed_from_u64(RNG_SEED),
-        }
-    }
-
-    /// Encodes a single sequence as 2-bit.
-    ///
-    /// Will return `None` if the sequence is invalid and the policy does not allow correction.
-    pub fn encode_single(&mut self, primary: &[u8]) -> Result<Option<&[u64]>> {
-        // Fill the buffer with the bit representation of the nucleotides
-        self.clear();
-        if self.bitsize.encode(primary, &mut self.sbuffer).is_err() {
-            self.clear();
-            if self
-                .policy
-                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
-            {
-                self.bitsize.encode(&self.s_ibuf, &mut self.sbuffer)?;
-            } else {
-                return Ok(None);
-            }
-        }
-        Ok(Some(&self.sbuffer))
-    }
-
-    /// Encodes a pair of sequences as 2-bit.
-    ///
-    /// Will return `None` if either sequence is invalid and the policy does not allow correction.
-    pub fn encode_paired(
-        &mut self,
-        primary: &[u8],
-        extended: &[u8],
-    ) -> Result<Option<(&[u64], &[u64])>> {
-        self.clear();
-        if self.bitsize.encode(primary, &mut self.sbuffer).is_err()
-            || self.bitsize.encode(extended, &mut self.xbuffer).is_err()
-        {
-            self.clear();
-            if self
-                .policy
-                .handle(primary, &mut self.s_ibuf, &mut self.rng)?
-                && self
-                    .policy
-                    .handle(extended, &mut self.x_ibuf, &mut self.rng)?
-            {
-                self.bitsize.encode(&self.s_ibuf, &mut self.sbuffer)?;
-                self.bitsize.encode(&self.x_ibuf, &mut self.xbuffer)?;
-            } else {
-                return Ok(None);
-            }
-        }
-        Ok(Some((&self.sbuffer, &self.xbuffer)))
-    }
-
-    /// Clear all buffers and reset the encoder.
-    pub fn clear(&mut self) {
-        self.sbuffer.clear();
-        self.xbuffer.clear();
-        self.s_ibuf.clear();
-        self.x_ibuf.clear();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::SequencingRecordBuilder;
+    use crate::utils::read_u64_le;
     use crate::vbq::{FileHeaderBuilder, header::SIZE_HEADER};
+
+    #[test]
+    fn test_policy_skipped_records_do_not_fragment_blocks() -> super::Result<()> {
+        // Two writers fed the same valid records must produce identical output,
+        // even when one is also fed invalid (policy-skipped) records that would
+        // overflow the current block: a skipped record must never trigger a flush.
+        let header = FileHeaderBuilder::new().block(2048).build();
+        let mut plain = WriterBuilder::default().header(header).build(Vec::new())?;
+        let mut skipped = WriterBuilder::default().header(header).build(Vec::new())?;
+
+        let valid = b"ACGT".repeat(25); // 100 bp
+        let invalid = b"N".repeat(300); // always skipped by IgnoreSequence
+        for _ in 0..200 {
+            let invalid_record = SequencingRecordBuilder::default().s_seq(&invalid).build()?;
+            assert!(!skipped.push(invalid_record)?);
+
+            let valid_record = SequencingRecordBuilder::default().s_seq(&valid).build()?;
+            assert!(plain.push(valid_record)?);
+            let valid_record = SequencingRecordBuilder::default().s_seq(&valid).build()?;
+            assert!(skipped.push(valid_record)?);
+        }
+        plain.finish()?;
+        skipped.finish()?;
+
+        assert!(plain.ranges.len() > 1, "test should span multiple blocks");
+        assert_eq!(plain.ranges.len(), skipped.ranges.len());
+        assert_eq!(plain.inner, skipped.inner);
+        Ok(())
+    }
 
     #[test]
     fn test_headless_writer() -> super::Result<()> {
@@ -1519,7 +1414,6 @@ mod tests {
     #[test]
     fn test_index_always_written_on_finish() -> super::Result<()> {
         use crate::vbq::index::INDEX_END_MAGIC;
-        use byteorder::{ByteOrder, LittleEndian};
 
         // Create a writer with some records
         let header = FileHeaderBuilder::new().build();
@@ -1543,7 +1437,7 @@ mod tests {
         // Verify the file ends with the index magic number
         assert!(bytes.len() >= 8, "File is too short to contain index");
         let magic_offset = bytes.len() - 8;
-        let magic = LittleEndian::read_u64(&bytes[magic_offset..]);
+        let magic = read_u64_le(&bytes[magic_offset..]);
         assert_eq!(
             magic, INDEX_END_MAGIC,
             "Index magic number not found at end of file"
@@ -1552,7 +1446,7 @@ mod tests {
         // Verify we can read the index size
         assert!(bytes.len() >= 16, "File is too short to contain index size");
         let size_offset = bytes.len() - 16;
-        let index_size = LittleEndian::read_u64(&bytes[size_offset..size_offset + 8]);
+        let index_size = read_u64_le(&bytes[size_offset..size_offset + 8]);
         assert!(index_size > 0, "Index size should be greater than 0");
 
         // Verify the index size makes sense (should be less than total file size)
@@ -1567,7 +1461,6 @@ mod tests {
     #[test]
     fn test_finish_idempotent() -> super::Result<()> {
         use crate::vbq::index::INDEX_END_MAGIC;
-        use byteorder::{ByteOrder, LittleEndian};
 
         // Create a writer
         let header = FileHeaderBuilder::new().build();
@@ -1599,7 +1492,7 @@ mod tests {
         // Verify only one index magic number at the end
         let bytes = &writer.inner;
         let magic_offset = bytes.len() - 8;
-        let magic = LittleEndian::read_u64(&bytes[magic_offset..]);
+        let magic = read_u64_le(&bytes[magic_offset..]);
         assert_eq!(magic, INDEX_END_MAGIC);
 
         Ok(())

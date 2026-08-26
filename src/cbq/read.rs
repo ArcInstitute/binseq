@@ -231,11 +231,7 @@ impl ParallelReader for MmapReader {
         num_threads: usize,
         range: std::ops::Range<usize>,
     ) -> crate::Result<()> {
-        let num_threads = if num_threads == 0 {
-            num_cpus::get()
-        } else {
-            num_threads.min(num_cpus::get())
-        };
+        let num_threads = crate::parallel::clamp_threads(num_threads);
 
         // validate range
         let total_records = self.num_records();
@@ -258,52 +254,13 @@ impl ParallelReader for MmapReader {
             return Ok(()); // nothing to do
         }
 
-        // Distribute blocks evenly across threads, giving extra blocks to first threads
-        let base_blocks_per_thread = num_blocks / num_threads;
-        let extra_blocks = num_blocks % num_threads;
-
+        // Distribute blocks evenly across threads
         let mut handles = Vec::new();
-        for thread_id in 0..num_threads {
-            // Threads 0..extra_blocks get one extra block
-            let blocks_for_this_thread = if thread_id < extra_blocks {
-                base_blocks_per_thread + 1
-            } else {
-                base_blocks_per_thread
-            };
-
-            // Calculate cumulative start position
-            let start_block_idx = if thread_id < extra_blocks {
-                thread_id * (base_blocks_per_thread + 1)
-            } else {
-                extra_blocks * (base_blocks_per_thread + 1)
-                    + (thread_id - extra_blocks) * base_blocks_per_thread
-            };
-            let end_block_idx = start_block_idx + blocks_for_this_thread;
-
-            // Skip threads with no work (happens when num_threads > num_blocks)
-            if blocks_for_this_thread == 0 {
-                continue;
-            }
-
+        for t_block_ranges in relevant_blocks.chunks(num_blocks.div_ceil(num_threads)) {
+            let t_block_ranges = t_block_ranges.to_vec();
+            let range = range.clone();
             let mut t_reader = self.clone();
             let mut t_proc = processor.clone();
-
-            // pull all block ranges for this thread
-            let t_block_ranges = relevant_blocks
-                .iter()
-                .skip(start_block_idx)
-                .take(end_block_idx - start_block_idx)
-                .copied()
-                .collect::<Vec<_>>();
-
-            // eprintln!(
-            //     "Thread {} block range: {}-{}. First block Cumulative Records: {}. Last block Cumulative Records: {}",
-            //     thread_id,
-            //     start_block_idx,
-            //     end_block_idx,
-            //     t_block_ranges[0].cumulative_records,
-            //     t_block_ranges.last().unwrap().cumulative_records
-            // );
 
             let thread_handle = thread::spawn(move || -> crate::Result<()> {
                 for b_range in t_block_ranges {
@@ -580,39 +537,6 @@ mod tests {
         let result = MmapReader::new("./Cargo.toml");
         // This should fail during header validation
         assert!(result.is_err(), "Should fail on invalid file format");
-    }
-
-    // ==================== Block Header Iterator Tests ====================
-
-    #[test]
-    fn test_iter_block_headers() {
-        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
-
-        let headers: Vec<_> = reader
-            .iter_block_headers()
-            .take(5)
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
-
-        assert!(!headers.is_empty(), "Should have at least one block header");
-
-        for header in headers {
-            assert!(header.num_records > 0, "Block should have records");
-        }
-    }
-
-    #[test]
-    fn test_iter_block_headers_count() {
-        let reader = MmapReader::new(TEST_CBQ_FILE).unwrap();
-
-        let header_count = reader
-            .iter_block_headers()
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .len();
-
-        let num_blocks = reader.num_blocks();
-        assert_eq!(header_count, num_blocks, "Should iterate all block headers");
     }
 
     // ==================== Empty Range Tests ====================

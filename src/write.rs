@@ -268,13 +268,7 @@ impl BinseqWriterBuilder {
             bitsize: Some(header.bits),
             paired: header.is_paired(),
             flags: header.flags,
-            compression: false,
-            headers: false,
-            quality: false,
-            compression_level: None,
-            block_size: None,
-            headless: false,
-            policy: None,
+            ..Self::new(Format::Bq)
         }
     }
 
@@ -283,8 +277,6 @@ impl BinseqWriterBuilder {
     pub fn from_vbq_header(header: vbq::FileHeader) -> Self {
         Self {
             format: Format::Vbq,
-            slen: None,
-            xlen: None,
             flags: header.flags,
             quality: header.qual,
             paired: header.paired,
@@ -292,9 +284,7 @@ impl BinseqWriterBuilder {
             headers: header.headers,
             compression: header.compressed,
             block_size: Some(header.block as usize),
-            policy: None,
-            compression_level: None,
-            headless: false,
+            ..Self::new(Format::Vbq)
         }
     }
 
@@ -309,18 +299,13 @@ impl BinseqWriterBuilder {
             paired: header.is_paired(),
             block_size: Some(header.block_size as usize),
             compression_level: Some(header.compression_level as i32),
-            compression: false,
-            slen: None,
-            xlen: None,
-            bitsize: None,
-            policy: None,
-            headless: false,
+            ..Self::new(Format::Cbq)
         }
     }
 
     /// Encode FASTX file(s) to BINSEQ format
     ///
-    /// This method returns a [`FastxEncoderBuilder`] that allows you to configure
+    /// This method returns a [`FastxEncoderBuilder`](crate::utils::FastxEncoderBuilder) that allows you to configure
     /// the input source and threading options before executing the encoding.
     ///
     /// This is an alternative to [`build`](Self::build) that directly processes
@@ -336,19 +321,19 @@ impl BinseqWriterBuilder {
     /// use binseq::write::{BinseqWriterBuilder, Format};
     /// use std::fs::File;
     ///
-    /// // Encode from stdin to VBQ
-    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
+    /// // Encode from stdin to CBQ
+    /// let writer = BinseqWriterBuilder::new(Format::Cbq)
     ///     .quality(true)
     ///     .headers(true)
-    ///     .encode_fastx(File::create("output.vbq")?)
+    ///     .encode_fastx(File::create("output.cbq")?)
     ///     .input_stdin()
     ///     .threads(8)
     ///     .run()?;
     ///
     /// // Encode paired-end reads
-    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
+    /// let writer = BinseqWriterBuilder::new(Format::Cbq)
     ///     .quality(true)
-    ///     .encode_fastx(File::create("output.vbq")?)
+    ///     .encode_fastx(File::create("output.cbq")?)
     ///     .input_paired("R1.fastq", "R2.fastq")
     ///     .run()?;
     /// # Ok::<(), binseq::Error>(())
@@ -608,10 +593,8 @@ impl<W: Write> BinseqWriter<W> {
     /// - There's an I/O error during ingestion
     pub fn ingest_completed(&mut self, other: &mut BinseqWriter<Vec<u8>>) -> Result<()> {
         match (self, other) {
-            (Self::Bq(dst), BinseqWriter::Bq(src)) => dst.ingest(src),
-            (Self::Vbq(dst), BinseqWriter::Vbq(src)) => dst.ingest(src),
             (Self::Cbq(dst), BinseqWriter::Cbq(src)) => dst.ingest_completed(src),
-            _ => Err(WriteError::FormatMismatch.into()),
+            (dst, src) => dst.ingest(src),
         }
     }
 }
@@ -995,444 +978,83 @@ mod tests {
             .unwrap()
     }
 
-    // ==================== VBQ Tests ====================
+    // ==================== Writer x Record Specification Matrix ====================
+
+    type RecordFn = fn() -> SequencingRecord<'static>;
 
     #[test]
-    fn test_vbq_single_minimal_writer_minimal_record() -> Result<()> {
-        // Writer: single-end, no quality, no headers, no flags
-        // Record: single-end, no quality, no headers, no flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(false)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
+    fn test_record_specification_matrix() -> Result<()> {
+        // (format, paired, quality, headers, flags, record, expect_ok)
+        //
+        // - Under-specified: record is missing data the writer needs -> error
+        // - Over-specified: record has extra data the writer ignores -> success
+        // - Correctly-specified: record matches writer config exactly -> success
+        // BQ ignores quality/headers settings entirely.
+        #[rustfmt::skip]
+        let cases: &[(Format, bool, bool, bool, bool, RecordFn, bool)] = &[
+            (Format::Vbq, false, false, false, false, minimal_single_record, true),
+            (Format::Vbq, false, false, false, false, full_single_record,    true),
+            (Format::Vbq, false, true,  true,  true,  minimal_single_record, false),
+            (Format::Vbq, false, true,  true,  true,  full_single_record,    true),
+            (Format::Vbq, true,  false, false, false, minimal_single_record, false),
+            (Format::Vbq, false, false, false, false, minimal_paired_record, true),
+            (Format::Vbq, true,  false, false, false, full_paired_record,    true),
+            (Format::Vbq, true,  true,  true,  true,  full_paired_record,    true),
+            (Format::Cbq, false, false, false, false, minimal_single_record, true),
+            (Format::Cbq, false, false, false, false, full_single_record,    true),
+            (Format::Cbq, false, true,  true,  true,  minimal_single_record, false),
+            (Format::Cbq, false, true,  true,  true,  full_single_record,    true),
+            (Format::Cbq, true,  false, false, false, minimal_single_record, false),
+            (Format::Cbq, false, false, false, false, minimal_paired_record, true),
+            (Format::Cbq, true,  false, false, false, full_paired_record,    true),
+            (Format::Cbq, true,  true,  true,  true,  full_paired_record,    true),
+            (Format::Bq,  false, false, false, false, minimal_single_record, true),
+            (Format::Bq,  false, false, false, false, full_single_record,    true),
+            (Format::Bq,  false, true,  false, false, minimal_single_record, true),
+            (Format::Bq,  false, true,  false, false, full_single_record,    true),
+            (Format::Bq,  true,  false, false, false, minimal_single_record, false),
+            (Format::Bq,  false, false, false, false, minimal_paired_record, true),
+            (Format::Bq,  true,  false, false, false, full_paired_record,    true),
+            (Format::Bq,  true,  true,  false, true,  full_paired_record,    true),
+        ];
 
-        let record = minimal_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
+        for &(format, paired, quality, headers, flags, record, expect_ok) in cases {
+            let mut builder = BinseqWriterBuilder::new(format)
+                .paired(paired)
+                .quality(quality)
+                .headers(headers)
+                .flags(flags);
+            // BQ is fixed-length: sequence lengths come from the header
+            if matches!(format, Format::Bq) {
+                builder = builder.slen(32);
+                if paired {
+                    builder = builder.xlen(32);
+                }
+            }
+            let mut writer = builder.build(Cursor::new(Vec::new()))?;
+
+            let case = format!(
+                "{format:?} paired={paired} quality={quality} headers={headers} flags={flags}"
+            );
+            let result = writer.push(record());
+            if expect_ok {
+                assert!(result.unwrap_or_else(|e| panic!("{case}: {e}")), "{case}");
+                writer.finish()?;
+            } else {
+                assert!(result.is_err(), "{case}: expected error");
+            }
+        }
         Ok(())
     }
 
     #[test]
-    fn test_vbq_single_minimal_writer_full_record() -> Result<()> {
-        // Writer: single-end, no quality, no headers, no flags
-        // Record: single-end, with quality, headers, flags
-        // Expected: success (over-specified - extra data ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(false)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_vbq_single_full_writer_minimal_record() -> Result<()> {
-        // Writer: single-end, with quality, headers, flags
-        // Record: single-end, no quality, no headers, no flags
-        // Expected: error (under-specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(false)
-            .quality(true)
-            .headers(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        let result = writer.push(record);
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_vbq_single_full_writer_full_record() -> Result<()> {
-        // Writer: single-end, with quality, headers, flags
-        // Record: single-end, with quality, headers, flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(false)
-            .quality(true)
-            .headers(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_vbq_paired_writer_single_record() -> Result<()> {
-        // Writer: paired
-        // Record: single-end
-        // Expected: error (under-specified - missing R2)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(true)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        let result = writer.push(record);
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_vbq_single_writer_paired_record() -> Result<()> {
-        // Writer: single-end
-        // Record: paired
-        // Expected: success (over-specified - R2 ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(false)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_vbq_paired_minimal_writer_paired_full_record() -> Result<()> {
-        // Writer: paired, no quality, no headers, no flags
-        // Record: paired, with quality, headers, flags
-        // Expected: success (over-specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(true)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_vbq_paired_full_writer_paired_full_record() -> Result<()> {
-        // Writer: paired, with quality, headers, flags
-        // Record: paired, with quality, headers, flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Vbq)
-            .paired(true)
-            .quality(true)
-            .headers(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    // ==================== CBQ Tests ====================
-
-    #[test]
-    fn test_cbq_single_minimal_writer_minimal_record() -> Result<()> {
-        // Writer: single-end, no quality, no headers, no flags
-        // Record: single-end, no quality, no headers, no flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(false)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_single_minimal_writer_full_record() -> Result<()> {
-        // Writer: single-end, no quality, no headers, no flags
-        // Record: single-end, with quality, headers, flags
-        // Expected: success (over-specified - extra data ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(false)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_single_full_writer_minimal_record() -> Result<()> {
-        // Writer: single-end, with quality, headers, flags
-        // Record: single-end, no quality, no headers, no flags
-        // Expected: error (under-specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(false)
-            .quality(true)
-            .headers(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        let result = writer.push(record);
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_single_full_writer_full_record() -> Result<()> {
-        // Writer: single-end, with quality, headers, flags
-        // Record: single-end, with quality, headers, flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(false)
-            .quality(true)
-            .headers(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_paired_writer_single_record() -> Result<()> {
-        // Writer: paired
-        // Record: single-end
-        // Expected: error (under-specified - missing R2)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(true)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        let result = writer.push(record);
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_single_writer_paired_record() -> Result<()> {
-        // Writer: single-end
-        // Record: paired
-        // Expected: success (over-specified - R2 ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(false)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_paired_minimal_writer_paired_full_record() -> Result<()> {
-        // Writer: paired, no quality, no headers, no flags
-        // Record: paired, with quality, headers, flags
-        // Expected: success (over-specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(true)
-            .quality(false)
-            .headers(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_cbq_paired_full_writer_paired_full_record() -> Result<()> {
-        // Writer: paired, with quality, headers, flags
-        // Record: paired, with quality, headers, flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Cbq)
-            .paired(true)
-            .quality(true)
-            .headers(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    // ==================== BQ Tests ====================
-    // Note: BQ format has fixed-length sequences and doesn't support headers
-
-    #[test]
-    fn test_bq_single_minimal_writer_minimal_record() -> Result<()> {
-        // Writer: single-end, no quality, no flags
-        // Record: single-end, no quality, no flags
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
+    fn test_bq_ignores_quality_flag() -> Result<()> {
+        // BQ format doesn't support quality scores; the setting is ignored
+        let writer = BinseqWriterBuilder::new(Format::Bq)
             .slen(32)
-            .paired(false)
-            .quality(false)
-            .flags(false)
+            .quality(true)
             .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_single_minimal_writer_full_record() -> Result<()> {
-        // Writer: single-end, no quality, no flags
-        // Record: single-end, with quality, headers, flags
-        // Expected: success (over-specified - extra data ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .paired(false)
-            .quality(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_single_with_quality_writer_minimal_record() -> Result<()> {
-        // Writer: single-end, with quality (note: BQ ignores quality setting)
-        // Record: single-end, no quality
-        // Expected: success (BQ format doesn't support quality scores, setting is ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .paired(false)
-            .quality(true) // This is ignored for BQ format
-            .build(Cursor::new(Vec::new()))?;
-
-        // BQ always reports has_quality as false
         assert!(!writer.has_quality());
-
-        let record = minimal_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_single_with_quality_writer_full_record() -> Result<()> {
-        // Writer: single-end, with quality
-        // Record: single-end, with quality
-        // Expected: success (correctly specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .paired(false)
-            .quality(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_single_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_paired_writer_single_record() -> Result<()> {
-        // Writer: paired
-        // Record: single-end
-        // Expected: error (under-specified - missing R2)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .xlen(32)
-            .paired(true)
-            .quality(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_single_record();
-        let result = writer.push(record);
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_single_writer_paired_record() -> Result<()> {
-        // Writer: single-end
-        // Record: paired
-        // Expected: success (over-specified - R2 ignored)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .paired(false)
-            .quality(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = minimal_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_paired_minimal_writer_paired_full_record() -> Result<()> {
-        // Writer: paired, no quality, no flags
-        // Record: paired, with quality, headers, flags
-        // Expected: success (over-specified)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .xlen(32)
-            .paired(true)
-            .quality(false)
-            .flags(false)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_paired_full_writer_paired_full_record() -> Result<()> {
-        // Writer: paired, with quality, flags
-        // Record: paired, with quality, headers, flags
-        // Expected: success (correctly specified, headers ignored for BQ)
-        let mut writer = BinseqWriterBuilder::new(Format::Bq)
-            .slen(32)
-            .xlen(32)
-            .paired(true)
-            .quality(true)
-            .flags(true)
-            .build(Cursor::new(Vec::new()))?;
-
-        let record = full_paired_record();
-        assert!(writer.push(record)?);
-        writer.finish()?;
         Ok(())
     }
 

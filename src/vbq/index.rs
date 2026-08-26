@@ -32,19 +32,11 @@
 //! - Cumulative record counts changed from `u32` to `u64`
 //! - Support for files with more than 4 billion records
 
-use std::{
-    fs::File,
-    io::{Cursor, Read, Write},
-    path::Path,
-};
+use std::io::{Cursor, Read, Write};
 
-use byteorder::{ByteOrder, LittleEndian};
+use crate::utils::{read_u32_le, read_u64_le};
 use zstd::{Decoder, Encoder};
 
-use super::{
-    BlockHeader, FileHeader,
-    header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
-};
 use crate::error::{IndexError, Result};
 
 /// Size of `BlockRange` in bytes
@@ -182,27 +174,16 @@ impl BlockRange {
     /// * `Err(_)` - If an error occurred during writing
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buf = [0; SIZE_BLOCK_RANGE];
-        LittleEndian::write_u64(&mut buf[0..8], self.start_offset);
-        LittleEndian::write_u64(&mut buf[8..16], self.len);
-        LittleEndian::write_u32(&mut buf[16..20], self.block_records);
-        LittleEndian::write_u64(&mut buf[20..28], self.cumulative_records);
+        buf[0..8].copy_from_slice(&self.start_offset.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.len.to_le_bytes());
+        buf[16..20].copy_from_slice(&self.block_records.to_le_bytes());
+        buf[20..28].copy_from_slice(&self.cumulative_records.to_le_bytes());
         buf[28..].copy_from_slice(&self.reservation);
         writer.write_all(&buf)?;
         Ok(())
     }
 
-    /// Deserializes a `BlockRange` from a fixed-size buffer
-    ///
-    /// This method deserializes a `BlockRange` from a 32-byte buffer in the format
-    /// used by `write_bytes`. It's typically used when reading an index file.
-    ///
-    /// # Parameters
-    ///
-    /// * `buffer` - A fixed-size buffer containing a serialized `BlockRange`
-    ///
-    /// # Returns
-    ///
-    /// A new `BlockRange` with the values read from the buffer
+    /// Deserializes a `BlockRange` from a slice of bytes
     ///
     /// # Format
     ///
@@ -212,39 +193,19 @@ impl BlockRange {
     /// - Bytes 16-19: `block_records` (u32, little endian)
     /// - Bytes 20-27: `cumulative_records` (u64, little endian)
     /// - Bytes 28-31: reservation (ignored, default value used)
-    #[must_use]
-    pub fn from_exact(buffer: &[u8; SIZE_BLOCK_RANGE]) -> Self {
-        Self {
-            start_offset: LittleEndian::read_u64(&buffer[0..8]),
-            len: LittleEndian::read_u64(&buffer[8..16]),
-            block_records: LittleEndian::read_u32(&buffer[16..20]),
-            cumulative_records: LittleEndian::read_u64(&buffer[20..28]),
-            reservation: INDEX_RESERVATION,
-        }
-    }
-
-    /// Deserializes a `BlockRange` from a slice of bytes
-    ///
-    /// This is a convenience method that copies the first 32 bytes from the provided slice
-    /// into a fixed-size buffer and then calls `from_exact`. It's useful when reading from
-    /// a larger buffer that contains multiple serialized `BlockRange` instances.
-    ///
-    /// # Parameters
-    ///
-    /// * `buffer` - A slice containing at least 32 bytes with a serialized `BlockRange`
-    ///
-    /// # Returns
-    ///
-    /// A new `BlockRange` with the values read from the buffer
     ///
     /// # Panics
     ///
-    /// This method will panic if the buffer is less than 32 bytes long.
+    /// Panics if the buffer is less than 28 bytes long.
     #[must_use]
     pub fn from_bytes(buffer: &[u8]) -> Self {
-        let mut buf = [0; SIZE_BLOCK_RANGE];
-        buf.copy_from_slice(buffer);
-        Self::from_exact(&buf)
+        Self {
+            start_offset: read_u64_le(&buffer[0..8]),
+            len: read_u64_le(&buffer[8..16]),
+            block_records: read_u32_le(&buffer[16..20]),
+            cumulative_records: read_u64_le(&buffer[20..28]),
+            reservation: INDEX_RESERVATION,
+        }
     }
 }
 
@@ -257,22 +218,11 @@ impl BlockRange {
 /// The header has a fixed size of 32 bytes to ensure compatibility across versions.
 #[derive(Debug, Clone, Copy)]
 pub struct IndexHeader {
-    /// Magic number to designate the index file ("VBQINDEX" in ASCII)
-    ///
-    /// This is used to verify that a file is indeed a VBQ index file.
-    /// (8 bytes in serialized form)
-    magic: u64,
-
     /// Total size of the indexed VBQ file in bytes
     ///
-    /// This is used to verify that the index matches the file it references.
-    /// (8 bytes in serialized form)
+    /// The serialized form also carries the `INDEX_MAGIC` magic number (8 bytes)
+    /// and 16 reserved bytes.
     bytes: u64,
-
-    /// Reserved bytes for future extensions
-    ///
-    /// (16 bytes in serialized form)
-    reserved: [u8; INDEX_HEADER_SIZE - 16],
 }
 impl IndexHeader {
     /// Creates a new index header for a VBQ file of the specified size
@@ -285,11 +235,7 @@ impl IndexHeader {
     ///
     /// A new `IndexHeader` instance with the appropriate magic number and size
     pub fn new(bytes: u64) -> Self {
-        Self {
-            magic: INDEX_MAGIC,
-            bytes,
-            reserved: [42; INDEX_HEADER_SIZE - 16],
-        }
+        Self { bytes }
     }
     /// Reads an index header from the provided reader
     ///
@@ -312,28 +258,14 @@ impl IndexHeader {
     /// - Bytes 0-7: magic number (u64, little endian, must be `INDEX_MAGIC`)
     /// - Bytes 8-15: file size in bytes (u64, little endian)
     /// - Bytes 16-31: reserved for future extensions
-    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self> {
-        let mut buffer = [0; INDEX_HEADER_SIZE];
-        reader.read_exact(&mut buffer)?;
-        let magic = LittleEndian::read_u64(&buffer[0..8]);
-        let bytes = LittleEndian::read_u64(&buffer[8..16]);
-        let Ok(reserved) = buffer[16..INDEX_HEADER_SIZE].try_into() else {
-            return Err(IndexError::InvalidReservedBytes.into());
-        };
+    pub fn from_bytes(buffer: &[u8]) -> Result<Self> {
+        let magic = read_u64_le(&buffer[0..8]);
         if magic != INDEX_MAGIC {
             return Err(IndexError::InvalidMagicNumber(magic).into());
         }
         Ok(Self {
-            magic,
-            bytes,
-            reserved,
+            bytes: read_u64_le(&buffer[8..16]),
         })
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut buffer = [0; INDEX_HEADER_SIZE];
-        buffer.copy_from_slice(&bytes[..INDEX_HEADER_SIZE]);
-        Self::from_reader(&mut Cursor::new(buffer))
     }
 
     /// Serializes the index header to a binary format and writes it to the provided writer
@@ -356,11 +288,10 @@ impl IndexHeader {
     /// - Bytes 0-7: magic number (u64, little endian)
     /// - Bytes 8-15: file size in bytes (u64, little endian)
     /// - Bytes 16-31: reserved for future extensions
-    pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
-        let mut buffer = [0; INDEX_HEADER_SIZE];
-        LittleEndian::write_u64(&mut buffer[0..8], self.magic);
-        LittleEndian::write_u64(&mut buffer[8..16], self.bytes);
-        buffer[16..].copy_from_slice(&self.reserved);
+    pub fn write_bytes<W: Write>(self, writer: &mut W) -> Result<()> {
+        let mut buffer = [42; INDEX_HEADER_SIZE];
+        buffer[0..8].copy_from_slice(&INDEX_MAGIC.to_le_bytes());
+        buffer[8..16].copy_from_slice(&self.bytes.to_le_bytes());
         writer.write_all(&buffer)?;
         Ok(())
     }
@@ -374,22 +305,18 @@ impl IndexHeader {
 /// the file.
 ///
 /// The index is embedded at the end of VBQ files and can be loaded using
-/// `MmapReader::load_index()` or created by scanning a VBQ file using
-/// `BlockIndex::from_vbq()`. Once loaded, it provides information about block
+/// `MmapReader::load_index()`. Once loaded, it provides information about block
 /// locations, sizes, and record counts.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// use binseq::vbq::{BlockIndex, MmapReader};
+/// use binseq::vbq::MmapReader;
 /// use std::path::Path;
 ///
-/// // Create an index from a VBQ file
-/// let vbq_path = Path::new("example.vbq");
-/// let index = BlockIndex::from_vbq(vbq_path).unwrap();
-///
-/// // Use the index with a reader for parallel processing
-/// let reader = MmapReader::new(vbq_path).unwrap();
+/// // Load the embedded index from a VBQ file
+/// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
+/// let index = reader.load_index().unwrap();
 /// println!("File contains {} blocks", index.n_blocks());
 /// ```
 #[derive(Debug, Clone)]
@@ -480,85 +407,6 @@ impl BlockIndex {
         self.ranges.push(range);
     }
 
-    /// Creates a new index by scanning a VBQ file
-    ///
-    /// This method memory-maps the specified VBQ file and scans it block by block
-    /// to create an index. This is primarily used internally when embedding the index
-    /// into VBQ files during the write process.
-    ///
-    /// # Parameters
-    ///
-    /// * `path` - Path to the VBQ file to index
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Self)` - A new `BlockIndex` containing information about all blocks in the file
-    /// * `Err(_)` - If an error occurred during file opening, validation, or scanning
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::BlockIndex;
-    /// use std::path::Path;
-    ///
-    /// // Create an index from a VBQ file
-    /// let index = BlockIndex::from_vbq(Path::new("example.vbq")).unwrap();
-    ///
-    /// // Get statistics about the file
-    /// println!("File contains {} blocks", index.n_blocks());
-    ///
-    /// // Analyze the record distribution
-    /// if let Some(last_range) = index.ranges().last() {
-    ///     println!("Total records: {}", last_range.cumulative_records);
-    ///     println!("Average records per block: {}",
-    ///              last_range.cumulative_records as f64 / index.n_blocks() as f64);
-    /// }
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// This method uses memory mapping for efficiency, which allows the operating system
-    /// to load only the needed portions of the file into memory as they are accessed.
-    pub fn from_vbq<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-        let file_size = mmap.len();
-
-        // Read header from mapped memory (unused but checks for validity)
-        let _header = {
-            let mut header_bytes = [0u8; SIZE_HEADER];
-            header_bytes.copy_from_slice(&mmap[..SIZE_HEADER]);
-            FileHeader::from_bytes(&header_bytes)?
-        };
-
-        // Initialize position after the header
-        let mut pos = SIZE_HEADER;
-
-        // Initialize the collection
-        let index_header = IndexHeader::new(file_size as u64);
-        let mut index = BlockIndex::new(index_header);
-
-        // Find all block headers
-        let mut record_total = 0;
-        while pos < mmap.len() {
-            let block_header = {
-                let mut header_bytes = [0u8; SIZE_BLOCK_HEADER];
-                header_bytes.copy_from_slice(&mmap[pos..pos + SIZE_BLOCK_HEADER]);
-                BlockHeader::from_bytes(&header_bytes)?
-            };
-            index.add_range(BlockRange::new(
-                pos as u64,
-                block_header.size,
-                block_header.records,
-                record_total,
-            ));
-            pos += SIZE_BLOCK_HEADER + block_header.size as usize;
-            record_total += u64::from(block_header.records);
-        }
-
-        Ok(index)
-    }
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let index_header = IndexHeader::from_bytes(bytes)?;
         let buffer = {
@@ -610,13 +458,14 @@ impl BlockIndex {
         &self.ranges
     }
 
+    /// Prints a tab-separated summary of each block range to stdout
     pub fn pprint(&self) {
-        self.ranges.iter().for_each(|range| {
+        for range in &self.ranges {
             println!(
                 "{}\t{}\t{}\t{}",
                 range.start_offset, range.len, range.block_records, range.cumulative_records
             );
-        });
+        }
     }
 
     /// Returns the total number of records in the dataset
@@ -634,69 +483,6 @@ impl BlockIndex {
 mod tests {
     use super::*;
 
-    /// Writes a minimal raw VBQ file (file header + block headers/data, with
-    /// **no** embedded index) to `path`, suitable for `BlockIndex::from_vbq`.
-    ///
-    /// `from_vbq` scans block-by-block from just after the file header to
-    /// EOF, so it requires the file to end exactly at the last block's data
-    /// -- unlike files produced by `vbq::Writer`, which always append an
-    /// embedded index on `finish()` that `from_vbq` cannot parse as a block.
-    fn write_raw_vbq_file(path: &str, blocks: &[(u64, u32)]) {
-        let mut buffer = Vec::new();
-        FileHeader::default().write_bytes(&mut buffer).unwrap();
-        for &(size, records) in blocks {
-            BlockHeader::new(size, records)
-                .write_bytes(&mut buffer)
-                .unwrap();
-            buffer.extend(std::iter::repeat_n(0u8, size as usize));
-        }
-        std::fs::write(path, buffer).unwrap();
-    }
-
-    // ==================== BlockIndex::from_vbq Tests ====================
-
-    #[test]
-    fn test_from_vbq() {
-        let path = "test_index_from_vbq.vbq";
-        write_raw_vbq_file(path, &[(64, 3), (128, 5)]);
-
-        let index = BlockIndex::from_vbq(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-
-        assert_eq!(index.n_blocks(), 2);
-        assert_eq!(index.num_records(), 8);
-        assert_eq!(index.ranges()[0].cumulative_records, 0);
-        assert_eq!(index.ranges()[1].cumulative_records, 3);
-    }
-
-    #[test]
-    fn test_from_vbq_nonexistent_file() {
-        let result = BlockIndex::from_vbq("./data/does_not_exist.vbq");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_n_blocks() {
-        let path = "test_index_n_blocks.vbq";
-        write_raw_vbq_file(path, &[(32, 1)]);
-
-        let index = BlockIndex::from_vbq(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-
-        assert_eq!(index.n_blocks(), index.ranges().len());
-    }
-
-    #[test]
-    fn test_pprint() {
-        let path = "test_index_pprint.vbq";
-        write_raw_vbq_file(path, &[(32, 1)]);
-
-        // Just verify it doesn't panic
-        let index = BlockIndex::from_vbq(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-        index.pprint();
-    }
-
     #[test]
     fn test_num_records_empty_index() {
         let index = BlockIndex::new(IndexHeader::new(0));
@@ -707,10 +493,10 @@ mod tests {
     // ==================== IndexHeader Tests ====================
 
     #[test]
-    fn test_index_header_from_reader_invalid_magic() {
+    fn test_index_header_from_bytes_invalid_magic() {
         let mut buffer = [0u8; INDEX_HEADER_SIZE];
-        LittleEndian::write_u64(&mut buffer[0..8], 0xDEAD_BEEF);
-        let result = IndexHeader::from_reader(&mut Cursor::new(buffer));
+        buffer[0..8].copy_from_slice(&0xDEAD_BEEF_u64.to_le_bytes());
+        let result = IndexHeader::from_bytes(&buffer);
         assert!(result.is_err());
     }
 
@@ -719,9 +505,8 @@ mod tests {
         let header = IndexHeader::new(12345);
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
-        let parsed = IndexHeader::from_reader(&mut Cursor::new(buffer)).unwrap();
+        let parsed = IndexHeader::from_bytes(&buffer).unwrap();
         assert_eq!(parsed.bytes, 12345);
-        assert_eq!(parsed.magic, INDEX_MAGIC);
     }
 
     // ==================== BlockIndex round-trip through write_bytes/from_bytes ====================

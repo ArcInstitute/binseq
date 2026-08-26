@@ -139,17 +139,16 @@ pub struct FileHeaderBuilder {
 }
 
 impl FileHeaderBuilder {
-    pub fn with_compression_level(&mut self, compression_level: usize) -> &mut Self {
-        self.compression_level = Some(compression_level);
-        self
-    }
-
     pub fn with_optional_compression_level(
         &mut self,
         compression_level: Option<usize>,
     ) -> &mut Self {
         self.compression_level = compression_level;
         self
+    }
+
+    pub fn with_compression_level(&mut self, compression_level: usize) -> &mut Self {
+        self.with_optional_compression_level(Some(compression_level))
     }
 
     pub fn with_block_size(&mut self, block_size: usize) -> &mut Self {

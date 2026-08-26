@@ -1,4 +1,3 @@
-use auto_impl::auto_impl;
 use bitnuc_deprec::BitSize;
 
 use crate::Result;
@@ -11,7 +10,6 @@ use crate::Result;
 /// Implemented by [`bq::RefRecord`](crate::bq::RefRecord) and [`vbq::RefRecord`](crate::vbq::RefRecord).
 ///
 /// Used to interact with [`ParallelProcessor`](crate::ParallelProcessor) for easy parallel processing.
-#[auto_impl(&, &mut)]
 pub trait BinseqRecord {
     /// Returns the bitsize of the record (number of bits per nucleotide)
     fn bitsize(&self) -> BitSize;

@@ -61,7 +61,7 @@ impl<'a> RefRecord<'a> {
     ///
     /// Panics if the buffer length doesn't match the expected size from the config
     #[must_use]
-    pub fn new(id: u64, buffer: &'a [u64], qbuf: &'a [u8], config: RecordConfig) -> Self {
+    pub(crate) fn new(id: u64, buffer: &'a [u64], qbuf: &'a [u8], config: RecordConfig) -> Self {
         assert_eq!(buffer.len(), config.record_size_u64());
         Self {
             id,
@@ -71,18 +71,6 @@ impl<'a> RefRecord<'a> {
             header_buf: [0; 20],
             header_len: 0,
         }
-    }
-    /// Returns the record's configuration
-    ///
-    /// The configuration defines the layout and size of the record's components.
-    #[must_use]
-    pub fn config(&self) -> RecordConfig {
-        self.config
-    }
-
-    pub fn set_id(&mut self, id: &[u8]) {
-        self.header_len = id.len();
-        self.header_buf[..self.header_len].copy_from_slice(id);
     }
 }
 
@@ -139,65 +127,39 @@ impl BinseqRecord for RefRecord<'_> {
 }
 
 /// A reference to a record in the map with a precomputed decoded buffer slice
-pub struct BatchRecord<'a> {
-    /// Unprocessed buffer slice (with flags)
-    buffer: &'a [u64],
+pub(crate) struct BatchRecord<'a> {
+    /// The underlying record view (encoded buffer, config, header)
+    inner: RefRecord<'a>,
     /// Decoded buffer slice
     dbuf: &'a [u8],
-    /// Record ID
-    id: u64,
-    /// The configuration that defines the layout and size of record components
-    config: RecordConfig,
-    /// A reusable pre-initialized quality score buffer
-    qbuf: &'a [u8],
-    /// Cached index string for the sequence header
-    header_buf: [u8; 20],
-    /// Length of the header in bytes
-    header_len: usize,
 }
 impl BinseqRecord for BatchRecord<'_> {
     fn bitsize(&self) -> BitSize {
-        self.config.bitsize
+        self.inner.bitsize()
     }
     fn index(&self) -> u64 {
-        self.id
+        self.inner.index()
     }
-    /// Clear the buffer and fill it with the sequence header
     fn sheader(&self) -> &[u8] {
-        &self.header_buf[..self.header_len]
+        self.inner.sheader()
     }
-
-    /// Clear the buffer and fill it with the extended header
     fn xheader(&self) -> &[u8] {
-        self.sheader()
+        self.inner.xheader()
     }
-
     fn flag(&self) -> Option<u64> {
-        if self.config.flags {
-            Some(self.buffer[0])
-        } else {
-            None
-        }
+        self.inner.flag()
     }
     fn slen(&self) -> u64 {
-        self.config.slen
+        self.inner.slen()
     }
     fn xlen(&self) -> u64 {
-        self.config.xlen
+        self.inner.xlen()
     }
     fn sbuf(&self) -> &[u64] {
-        if self.config.flags {
-            &self.buffer[1..=(self.config.schunk as usize)]
-        } else {
-            &self.buffer[..(self.config.schunk as usize)]
-        }
+        self.inner.sbuf()
     }
     fn xbuf(&self) -> &[u64] {
-        if self.config.flags {
-            &self.buffer[1 + self.config.schunk as usize..]
-        } else {
-            &self.buffer[self.config.schunk as usize..]
-        }
+        self.inner.xbuf()
     }
     fn decode_s(&self, dbuf: &mut Vec<u8>) -> Result<()> {
         dbuf.extend_from_slice(self.sseq());
@@ -209,31 +171,33 @@ impl BinseqRecord for BatchRecord<'_> {
     }
     /// Override this method since we can make use of block information
     fn sseq(&self) -> &[u8] {
-        let scalar = self.config.scalar();
+        let config = &self.inner.config;
+        let scalar = config.scalar();
         let mut lbound = 0;
-        let mut rbound = self.config.slen();
-        if self.config.flags {
+        let mut rbound = config.slen();
+        if config.flags {
             lbound += scalar;
             rbound += scalar;
         }
-        &self.dbuf[lbound..rbound]
+        self.dbuf.get(lbound..rbound).unwrap_or_default()
     }
     /// Override this method since we can make use of block information
     fn xseq(&self) -> &[u8] {
-        let scalar = self.config.scalar();
-        let mut lbound = scalar * self.config.schunk();
-        let mut rbound = lbound + self.config.xlen();
-        if self.config.flags {
+        let config = &self.inner.config;
+        let scalar = config.scalar();
+        let mut lbound = scalar * config.schunk();
+        let mut rbound = lbound + config.xlen();
+        if config.flags {
             lbound += scalar;
             rbound += scalar;
         }
-        &self.dbuf[lbound..rbound]
+        self.dbuf.get(lbound..rbound).unwrap_or_default()
     }
     fn squal(&self) -> &[u8] {
-        &self.qbuf[..self.config.slen()]
+        self.inner.squal()
     }
     fn xqual(&self) -> &[u8] {
-        &self.qbuf[..self.config.xlen()]
+        self.inner.xqual()
     }
 }
 
@@ -244,7 +208,7 @@ impl BinseqRecord for BatchRecord<'_> {
 /// It handles the translation between sequence lengths in base pairs
 /// and the number of u64 chunks needed to store the compressed data.
 #[derive(Clone, Copy)]
-pub struct RecordConfig {
+pub(crate) struct RecordConfig {
     /// The primary sequence length in base pairs
     slen: u64,
     /// The extended sequence length in base pairs
@@ -310,13 +274,6 @@ impl RecordConfig {
             header.bits,
             header.flags,
         )
-    }
-
-    /// Returns whether this record contains extended sequence data
-    ///
-    /// A record is considered paired if it has a non-zero extended sequence length.
-    pub fn paired(&self) -> bool {
-        self.xlen > 0
     }
 
     /// Returns the primary sequence length in base pairs
@@ -828,7 +785,7 @@ impl<R: Read> StreamReader<R> {
 ///
 /// This constant defines how many records each thread processes at a time
 /// during parallel processing operations.
-pub const BATCH_SIZE: usize = 1024;
+pub(crate) const BATCH_SIZE: usize = 1024;
 
 /// Parallel processing implementation for memory-mapped readers
 impl ParallelReader for MmapReader {
@@ -887,11 +844,7 @@ impl ParallelReader for MmapReader {
         range: Range<usize>,
     ) -> Result<()> {
         // Calculate the number of threads to use
-        let num_threads = if num_threads == 0 {
-            num_cpus::get()
-        } else {
-            num_threads.min(num_cpus::get())
-        };
+        let num_threads = crate::parallel::clamp_threads(num_threads);
 
         // Validate range
         let num_records = self.num_records();
@@ -972,13 +925,15 @@ impl ParallelReader for MmapReader {
 
                         // initialize the record
                         let record = BatchRecord {
-                            buffer: &ebuf[ebuf_start..(ebuf_start + rsize_u64)],
+                            inner: RefRecord {
+                                buffer: &ebuf[ebuf_start..(ebuf_start + rsize_u64)],
+                                qbuf: &qbuf,
+                                id: idx as u64,
+                                config: reader.config,
+                                header_buf,
+                                header_len,
+                            },
                             dbuf: &dbuf[dbuf_start..(dbuf_start + dbuf_rsize)],
-                            qbuf: &qbuf,
-                            id: idx as u64,
-                            config: reader.config,
-                            header_buf,
-                            header_len,
                         };
 
                         // process the record

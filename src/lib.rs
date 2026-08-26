@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
 #![doc = include_str!("../README.md")]
 //!
 //! # BINSEQ
@@ -80,6 +82,9 @@
 
 /// BQ - fixed length records, no quality scores
 pub mod bq;
+
+/// Shared nucleotide encoder for BQ/VBQ writers
+mod encoder;
 
 /// Error definitions
 pub mod error;

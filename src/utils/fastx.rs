@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use crate::{
     BinseqWriter, BinseqWriterBuilder, IntoBinseqError, Result, SequencingRecordBuilder,
-    error::FastxEncodingError,
+    error::WriteError,
 };
 
 type BoxedRead = Box<dyn Read + Send>;
@@ -189,14 +189,20 @@ impl FastxEncoderBuilder {
                 // build interleaved reader
                 let mut reader =
                     fastx::Reader::from_path(path).map_err(IntoBinseqError::into_binseq_error)?;
-                let (slen, xlen) = detect_seq_len(&mut reader, true)?;
+                // Only probe for an extended length when the writer is configured
+                // as paired (i.e. the single input is interleaved); otherwise a
+                // second read's length would mark fixed-length formats as paired.
+                let (slen, xlen) = detect_seq_len(&mut reader, self.builder.paired)?;
                 self.builder = self.builder.slen(slen as u32).xlen(xlen as u32);
                 (reader, None)
             }
             Some(FastxInput::Stdin) => {
                 let mut reader =
                     fastx::Reader::from_stdin().map_err(IntoBinseqError::into_binseq_error)?;
-                let (slen, xlen) = detect_seq_len(&mut reader, true)?;
+                // Only probe for an extended length when the writer is configured
+                // as paired (i.e. the single input is interleaved); otherwise a
+                // second read's length would mark fixed-length formats as paired.
+                let (slen, xlen) = detect_seq_len(&mut reader, self.builder.paired)?;
                 self.builder = self.builder.slen(slen as u32).xlen(xlen as u32);
                 (reader, None)
             }
@@ -211,100 +217,48 @@ impl FastxEncoderBuilder {
                 self.builder = self.builder.slen(slen as u32).xlen(xlen as u32);
                 (reader1, Some(reader2))
             }
-            None => return Err(FastxEncodingError::MissingInput.into()),
+            None => return Err(WriteError::MissingInput.into()),
         };
 
         let writer = self.builder.build(self.output)?;
-        if writer.is_paired() {
-            if let Some(r2) = r2 {
-                encode_paired(writer, r1, r2, self.threads)?;
-            } else {
-                encode_interleaved(writer, r1, self.threads)?;
-            }
-        } else {
-            encode_single_file(writer, r1, self.threads)?;
+        let paired = writer.is_paired();
+        let mut encoder = Encoder::new(writer)?;
+        match (paired, r2) {
+            (true, Some(r2)) => r1.process_parallel_paired(r2, &mut encoder, self.threads),
+            (true, None) => r1.process_parallel_interleaved(&mut encoder, self.threads),
+            (false, _) => r1.process_parallel(&mut encoder, self.threads),
         }
+        .map_err(IntoBinseqError::into_binseq_error)?;
+        encoder.finish()?;
 
         Ok(())
     }
-}
-
-/// Encode single-end reads from a file
-fn encode_single_file(
-    writer: BinseqWriter<BoxedWrite>,
-    reader: fastx::Reader<BoxedRead>,
-    threads: usize,
-) -> Result<()> {
-    let mut encoder = Encoder::new(writer)?;
-    reader
-        .process_parallel(&mut encoder, threads)
-        .map_err(IntoBinseqError::into_binseq_error)?;
-    encoder.finish()?;
-    Ok(())
-}
-
-/// Encode paired-end reads from interleaved file
-fn encode_interleaved(
-    writer: BinseqWriter<BoxedWrite>,
-    reader: fastx::Reader<BoxedRead>,
-    threads: usize,
-) -> Result<()> {
-    let mut encoder = Encoder::new(writer)?;
-    reader
-        .process_parallel_interleaved(&mut encoder, threads)
-        .map_err(IntoBinseqError::into_binseq_error)?;
-    encoder.finish()?;
-    Ok(())
-}
-
-/// Encode paired-end reads from files
-fn encode_paired(
-    writer: BinseqWriter<BoxedWrite>,
-    r1: fastx::Reader<BoxedRead>,
-    r2: fastx::Reader<BoxedRead>,
-    threads: usize,
-) -> Result<()> {
-    let mut encoder = Encoder::new(writer)?;
-    r1.process_parallel_paired(r2, &mut encoder, threads)
-        .map_err(IntoBinseqError::into_binseq_error)?;
-    encoder.finish()?;
-    Ok(())
 }
 
 fn detect_seq_len(
     reader: &mut fastx::Reader<BoxedRead>,
     interleaved: bool,
 ) -> Result<(usize, usize)> {
-    // Initialze the record set
+    // Initialize the record set
     let mut rset = reader.new_record_set();
     rset.fill(reader)
         .map_err(IntoBinseqError::into_binseq_error)?;
 
-    let (slen, xlen) = if interleaved {
+    let (slen, xlen) = {
         let mut rset_iter = rset.iter();
-        let Some(Ok(slen)) = rset_iter.next().map(|r| -> Result<usize> {
-            let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
+        let mut next_len = || -> Result<usize> {
+            let rec = rset_iter
+                .next()
+                .ok_or(WriteError::EmptyFastxFile)?
+                .map_err(IntoBinseqError::into_binseq_error)?;
             Ok(rec.seq().len())
-        }) else {
-            return Err(FastxEncodingError::EmptyFastxFile.into());
         };
-        let Some(Ok(xlen)) = rset_iter.next().map(|r| -> Result<usize> {
-            let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
-            Ok(rec.seq().len())
-        }) else {
-            return Err(FastxEncodingError::EmptyFastxFile.into());
-        };
+
+        let slen = next_len()?;
+        let xlen = if interleaved { next_len()? } else { 0 };
         (slen, xlen)
-    } else {
-        let mut rset_iter = rset.iter();
-        let Some(Ok(slen)) = rset_iter.next().map(|r| -> Result<usize> {
-            let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
-            Ok(rec.seq().len())
-        }) else {
-            return Err(FastxEncodingError::EmptyFastxFile.into());
-        };
-        (slen, 0)
     };
+
     reader
         .reload(&mut rset)
         .map_err(IntoBinseqError::into_binseq_error)?;
@@ -355,6 +309,15 @@ impl<Rf: Record> ParallelProcessor<Rf> for Encoder {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Only drain completed blocks mid-stream (keeps CBQ blocks full)
+        self.writer
+            .lock()
+            .ingest_completed(&mut self.thread_writer)
+            .map_err(IntoProcessError::into_process_error)?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         self.writer
             .lock()
             .ingest(&mut self.thread_writer)
@@ -384,6 +347,15 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for Encoder {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Only drain completed blocks mid-stream (keeps CBQ blocks full)
+        self.writer
+            .lock()
+            .ingest_completed(&mut self.thread_writer)
+            .map_err(IntoProcessError::into_process_error)?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         self.writer
             .lock()
             .ingest(&mut self.thread_writer)

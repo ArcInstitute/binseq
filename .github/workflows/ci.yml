@@ -16,9 +16,14 @@ jobs:
       - name: Build
         run: cargo build --verbose
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose --all-features
       - name: Run tests (release)
-        run: cargo test --verbose --release
+        run: cargo test --verbose --release --all-features
+      - name: Check feature matrix
+        run: |
+          cargo check --no-default-features
+          cargo check --no-default-features --features paraseq
+          cargo check --no-default-features --features anyhow
 
   fmt_lint:
     runs-on: ubuntu-latest
@@ -37,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: run example ${{ matrix.ext }}
-        run: cargo run --release --example grep -- ./data/subset.${{ matrix.ext }} "ACGTACGT"
+        run: cargo run --example grep -- ./data/subset.${{ matrix.ext }} "ACGTACGT"
 
   example_range:
     runs-on: ubuntu-latest
@@ -47,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: run example ${{ matrix.ext }}
-        run: cargo run --release --example parallel_range -- ./data/subset.${{ matrix.ext }} 4 30 200
+        run: cargo run --example parallel_range -- ./data/subset.${{ matrix.ext }} -T 4 --start 30 --end 200
 
   example_write:
     runs-on: ubuntu-latest
@@ -57,9 +62,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: run example (single) ${{ matrix.ext }}
-        run: cargo run --release --example write -- ./data/subset_R1.fastq.gz -o ./output.${{ matrix.ext }}
+        run: cargo run --example auto-write -F paraseq -- ./data/subset_R1.fastq.gz -o ./output.${{ matrix.ext }}
       - name: run example (paired) ${{ matrix.ext }}
-        run: cargo run --release --example write -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${{ matrix.ext }}
+        run: cargo run --example auto-write -F paraseq -- ./data/subset_R1.fastq.gz ./data/subset_R2.fastq.gz -o ./output.${{ matrix.ext }}
 
   example_read:
     runs-on: ubuntu-latest
@@ -69,4 +74,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: run example ${{ matrix.ext }}
-        run: cargo run --release --example read -- ./data/subset.${{ matrix.ext }}
+        run: cargo run --example read -- ./data/subset.${{ matrix.ext }}
