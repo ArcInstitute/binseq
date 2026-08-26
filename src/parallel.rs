@@ -146,22 +146,7 @@ pub trait ParallelReader {
         num_threads: usize,
     ) -> Result<()>;
 
-    /// Process records in parallel within a specified range
-    ///
-    /// This method allows parallel processing of a subset of records within the file,
-    /// defined by a start and end index. The range is distributed across the specified
-    /// number of threads.
-    ///
-    /// # Arguments
-    ///
-    /// * `processor` - The processor to use for each record
-    /// * `num_threads` - The number of threads to spawn
-    /// * `range` - The range of record indices to process
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all records were processed successfully
-    /// * `Err(Error)` - If an error occurred during processing
+    /// Process a range of record indices in parallel, distributed across `num_threads`
     fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,
@@ -169,21 +154,7 @@ pub trait ParallelReader {
         range: Range<usize>,
     ) -> Result<()>;
 
-    /// Validate the specified range for the file.
-    ///
-    /// This method checks if the provided range is valid for the file, ensuring that
-    /// the start index is less than the end index and both indices are within the
-    /// bounds of the file.
-    ///
-    /// # Arguments
-    ///
-    /// * `total_records` - The total number of records in the file
-    /// * `range` - The range of record indices to validate
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the range is valid
-    /// * `Err(Error)` - If the range is invalid
+    /// Validate that a record range is well-formed and within the file's bounds
     fn validate_range(&self, total_records: usize, range: &Range<usize>) -> Result<()> {
         if range.start >= total_records {
             Err(ReadError::OutOfRange {

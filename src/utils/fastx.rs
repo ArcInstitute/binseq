@@ -1,7 +1,4 @@
-//! FASTX encoding utilities for converting FASTX files to BINSEQ formats
-//!
-//! This module provides utilities for encoding FASTX (FASTA/FASTQ) files into
-//! BINSEQ formats using parallel processing via the `paraseq` crate.
+//! Parallel encoding of FASTX (FASTA/FASTQ) files into BINSEQ formats via `paraseq`.
 
 use std::{
     io::{Read, Write},
@@ -36,8 +33,8 @@ enum FastxInput {
 
 /// Builder for encoding FASTX files to BINSEQ format
 ///
-/// This builder is created by calling [`BinseqWriterBuilder::encode_fastx`] and
-/// provides a fluent interface for configuring the input source and threading options.
+/// Created by [`BinseqWriterBuilder::encode_fastx`]; configures the input source
+/// and threading before running the encoding.
 ///
 /// # Example
 ///
@@ -45,12 +42,12 @@ enum FastxInput {
 /// use binseq::write::{BinseqWriterBuilder, Format};
 /// use std::fs::File;
 ///
-/// // Encode from stdin to VBQ
-/// let writer = BinseqWriterBuilder::new(Format::Vbq)
+/// // Encode paired-end FASTQ to CBQ
+/// BinseqWriterBuilder::new(Format::Cbq)
 ///     .quality(true)
 ///     .headers(true)
-///     .encode_fastx(Box::new(File::create("output.vbq")?))
-///     .input_stdin()
+///     .encode_fastx(Box::new(File::create("output.cbq")?))
+///     .input_paired("R1.fastq", "R2.fastq")
 ///     .threads(8)
 ///     .run()?;
 /// # Ok::<(), binseq::Error>(())
@@ -74,18 +71,6 @@ impl FastxEncoderBuilder {
     }
 
     /// Read from a single FASTX file
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use binseq::write::{BinseqWriterBuilder, Format};
-    /// # use std::fs::File;
-    /// BinseqWriterBuilder::new(Format::Vbq)
-    ///     .encode_fastx(Box::new(File::create("output.vbq")?))
-    ///     .input("input.fastq")
-    ///     .run()?;
-    /// # Ok::<(), binseq::Error>(())
-    /// ```
     #[must_use]
     pub fn input<P: AsRef<Path>>(mut self, path: P) -> Self {
         self.input = Some(FastxInput::Single(path.as_ref().to_path_buf()));
@@ -93,39 +78,13 @@ impl FastxEncoderBuilder {
     }
 
     /// Read from stdin
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use binseq::write::{BinseqWriterBuilder, Format};
-    /// # use std::fs::File;
-    /// BinseqWriterBuilder::new(Format::Vbq)
-    ///     .encode_fastx(Box::new(File::create("output.vbq")?))
-    ///     .input_stdin()
-    ///     .run()?;
-    /// # Ok::<(), binseq::Error>(())
-    /// ```
     #[must_use]
     pub fn input_stdin(mut self) -> Self {
         self.input = Some(FastxInput::Stdin);
         self
     }
 
-    /// Read from paired FASTX files (R1, R2)
-    ///
-    /// This automatically sets the writer to paired mode.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use binseq::write::{BinseqWriterBuilder, Format};
-    /// # use std::fs::File;
-    /// BinseqWriterBuilder::new(Format::Vbq)
-    ///     .encode_fastx(Box::new(File::create("output.vbq")?))
-    ///     .input_paired("R1.fastq", "R2.fastq")
-    ///     .run()?;
-    /// # Ok::<(), binseq::Error>(())
-    /// ```
+    /// Read from paired FASTX files (R1, R2); sets the writer to paired mode
     #[must_use]
     pub fn input_paired<P: AsRef<Path>>(mut self, r1: P, r2: P) -> Self {
         self.input = Some(FastxInput::Paired(
@@ -137,52 +96,14 @@ impl FastxEncoderBuilder {
         self
     }
 
-    /// Set the number of threads for parallel processing
-    ///
-    /// If not set or set to 0, uses all available CPU cores.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use binseq::write::{BinseqWriterBuilder, Format};
-    /// # use std::fs::File;
-    /// BinseqWriterBuilder::new(Format::Vbq)
-    ///     .encode_fastx(Box::new(File::create("output.vbq")?))
-    ///     .input("input.fastq")
-    ///     .threads(8)
-    ///     .run()?;
-    /// # Ok::<(), binseq::Error>(())
-    /// ```
+    /// Set the number of threads for parallel processing (0: all available cores)
     #[must_use]
     pub fn threads(mut self, n: usize) -> Self {
         self.threads = n;
         self
     }
 
-    /// Execute the FASTX encoding
-    ///
-    /// This consumes the builder and returns a `BinseqWriter` that has been
-    /// populated with all records from the input FASTX file(s).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The input files cannot be read
-    /// - The FASTX format is invalid
-    /// - The writer configuration is incompatible with the input
-    /// - For BQ format with stdin input (cannot detect sequence length)
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use binseq::write::{BinseqWriterBuilder, Format};
-    /// # use std::fs::File;
-    /// let writer = BinseqWriterBuilder::new(Format::Vbq)
-    ///     .encode_fastx(Box::new(File::create("output.vbq")?))
-    ///     .input("input.fastq")
-    ///     .run()?;
-    /// # Ok::<(), binseq::Error>(())
-    /// ```
+    /// Execute the FASTX encoding, consuming the builder
     pub fn run(mut self) -> Result<()> {
         let (r1, r2) = match self.input {
             Some(FastxInput::Single(path)) => {
@@ -265,10 +186,7 @@ fn detect_seq_len(
     Ok((slen, xlen))
 }
 
-/// Parallel encoder for FASTX records to BINSEQ format
-///
-/// This struct implements the `ParallelProcessor` and `PairedParallelProcessor`
-/// traits from `paraseq` to enable efficient parallel encoding of FASTX files.
+/// Parallel encoder implementing `paraseq`'s processor traits
 #[derive(Clone)]
 struct Encoder {
     /// Global writer (shared across threads)

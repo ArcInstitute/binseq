@@ -30,10 +30,7 @@ pub struct ColumnarBlock {
     /// Position of all N's in the sequence
     pub(crate) npos: Vec<u64>,
 
-    /// Reusable buffer for encoding sequences
-    ///
-    /// Byte-native 2-bit packing, zero-padded to whole 8-byte words to
-    /// remain bit-identical with the legacy u64-per-32-bases on-disk layout.
+    /// Reusable 2-bit encoding buffer, zero-padded to whole 8-byte words (legacy u64 on-disk layout)
     ebuf: Vec<u8>,
 
     /// An Elias-Fano encoding for the N-positions
@@ -56,16 +53,10 @@ pub struct ColumnarBlock {
     l_seq_offsets: Vec<u64>,
     l_header_offsets: Vec<u64>,
 
-    /// Number of records in the block
-    ///
-    /// A record is a logical unit of data.
-    /// If the records are paired sequences this is the number of pairs.
+    /// Number of records in the block (a pair counts as one record)
     pub(crate) num_records: usize,
 
-    /// Number of sequences in the block
-    ///
-    /// This is the same as the number of records for unpaired sequences.
-    /// For paired sequences it will be twice the number of records.
+    /// Number of sequences in the block (twice `num_records` when paired)
     pub(crate) num_sequences: usize,
 
     /// Total nucleotides in this block
@@ -77,9 +68,7 @@ pub struct ColumnarBlock {
     qbuf: Vec<u8>,
     default_quality_score: u8,
 
-    /// The file header (used for block configuration)
-    ///
-    /// Not to be confused with the `BlockHeader`
+    /// The file header used for block configuration (not the `BlockHeader`)
     pub(crate) header: FileHeader,
 }
 impl ColumnarBlock {
@@ -349,10 +338,7 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    /// Returns the expected length of the encoded sequence buffer in bytes
-    ///
-    /// This is deterministically calculated based on the sequence length and the encoding scheme.
-    /// The on-disk format packs 32 bases per 8-byte word, so the buffer is padded to whole words.
+    /// Expected encoded sequence buffer length in bytes (32 bases per 8-byte word, padded to whole words).
     fn ebuf_len(&self) -> usize {
         self.nuclen.div_ceil(32) * 8
     }
@@ -437,12 +423,10 @@ impl ColumnarBlock {
         Ok(())
     }
 
-    /// Decompress all columns back to native representation
+    /// Decompress all columns back to native representation.
     ///
-    /// Note: `resize` can be only be used with `copy_decode` if passing
-    /// as `&mut [T]`. Passing a resized `&mut Vec<T>` will lead to an
-    /// append operation, not an overwrite. If passing `&mut Vec<T>`, the
-    /// `Vec` will be resized automatically by `copy_decode`.
+    /// Note: `copy_decode` into a `&mut Vec<T>` appends; pre-resized buffers
+    /// must be passed as `&mut [T]` to be overwritten.
     pub fn decompress_columns(&mut self) -> Result<()> {
         // decompress sequence lengths
         {

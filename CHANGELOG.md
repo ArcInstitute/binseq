@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Large cleanup of internal and public API.
 - Runtime dependencies removed (`byteorder`, `num_cpus`, `auto_impl`, and `memchr`).
 - Deprecated items removed from the public API.
+- Documentation overhaul: docs now center on CBQ as the recommended variant (VBQ is documented as superseded), examples use CBQ throughout, and docstrings are heavily simplified across the crate.
 
 ### Removed
 

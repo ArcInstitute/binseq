@@ -1,11 +1,4 @@
-//! Binary sequence writer module
-//!
-//! This module provides functionality for writing nucleotide sequences to binary files
-//! in a compact 2-bit format. It includes support for:
-//! - Single and paired sequence writing
-//! - Invalid nucleotide handling with configurable policies
-//! - Efficient buffering and encoding
-//! - Headless mode for parallel writing
+//! BQ writer for encoding nucleotide sequences into fixed-length binary records.
 
 use std::io::Write;
 
@@ -23,11 +16,7 @@ fn write_buffer<W: Write>(writer: &mut W, ebuf: &[u64]) -> Result<()> {
     Ok(())
 }
 
-/// Builder for creating configured `Writer` instances
-///
-/// This builder provides a flexible way to create writers with various
-/// configurations. It follows the builder pattern, allowing for optional
-/// settings to be specified in any order.
+/// Builder for configured [`Writer`] instances
 ///
 /// # Examples
 ///
@@ -48,9 +37,9 @@ fn write_buffer<W: Write>(writer: &mut W, ebuf: &[u64]) -> Result<()> {
 pub struct WriterBuilder {
     /// Required header defining sequence lengths and format
     header: Option<FileHeader>,
-    /// Optional policy for handling invalid nucleotides
+    /// Policy for handling invalid nucleotides
     policy: Option<Policy>,
-    /// Optional headless mode for parallel writing scenarios
+    /// Headless mode (skip writing the header) for parallel writing
     headless: Option<bool>,
 }
 impl WriterBuilder {
@@ -85,19 +74,10 @@ impl WriterBuilder {
     }
 }
 
-/// High-level writer for binary sequence files
+/// Writer for BQ files
 ///
-/// This writer provides a convenient interface for writing nucleotide sequences
-/// to binary files in a compact format. It handles sequence encoding, invalid
-/// nucleotide processing, and file format compliance.
-///
-/// The writer can operate in two modes:
-/// - Normal mode: Writes the header followed by records
-/// - Headless mode: Writes only records (useful for parallel writing)
-///
-/// # Type Parameters
-///
-/// * `W` - The underlying writer type that implements `Write`
+/// Headless mode skips writing the file header, for parallel writing where
+/// only one writer should emit it.
 #[derive(Clone)]
 pub struct Writer<W: Write> {
     /// The underlying writer for output
@@ -109,44 +89,11 @@ pub struct Writer<W: Write> {
     /// Encoder for converting sequences to binary format
     encoder: Encoder,
 
-    /// Whether this writer is in headless mode
-    /// When true, the header is not written to the output
+    /// Whether this writer is in headless mode (header not written)
     headless: bool,
 }
 impl<W: Write> Writer<W> {
-    /// Creates a new `Writer` instance with specified configuration
-    ///
-    /// This is a low-level constructor. For a more convenient way to create a
-    /// `Writer`, use the `WriterBuilder` struct.
-    ///
-    /// # Arguments
-    ///
-    /// * `inner` - The underlying writer to write to
-    /// * `header` - The header defining sequence lengths and format
-    /// * `policy` - The policy for handling invalid nucleotides
-    /// * `headless` - Whether to skip writing the header (for parallel writing)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Writer)` - A new writer instance
-    /// * `Err(Error)` - If writing the header fails
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use binseq::bq::{FileHeaderBuilder, Writer};
-    /// # use binseq::{Result, Policy};
-    /// # fn main() -> Result<()> {
-    /// let header = FileHeaderBuilder::new().slen(100).build()?;
-    /// let writer = Writer::new(
-    ///     Vec::new(),
-    ///     header,
-    ///     Policy::default(),
-    ///     false
-    /// )?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Creates a new `Writer`; prefer [`WriterBuilder`] for most uses.
     pub fn new(mut inner: W, header: FileHeader, policy: Policy, headless: bool) -> Result<Self> {
         if !headless {
             header.write_bytes(&mut inner)?;
@@ -174,42 +121,10 @@ impl<W: Write> Writer<W> {
         self.encoder.policy()
     }
 
-    /// Writes a record using the unified [`SequencingRecord`] API
+    /// Writes a [`SequencingRecord`], returning `false` if it was skipped
+    /// due to invalid nucleotides.
     ///
-    /// This method provides a consistent interface with VBQ and CBQ writers.
-    /// Note that BQ format does not support quality scores or headers - these
-    /// fields from the record will be ignored.
-    ///
-    /// # Arguments
-    ///
-    /// * `record` - A [`SequencingRecord`] containing the sequence data to write
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(true)` if the record was written successfully
-    /// * `Ok(false)` if the record was skipped due to invalid nucleotides
-    /// * `Err(_)` if writing failed
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use binseq::bq::{FileHeaderBuilder, WriterBuilder};
-    /// # use binseq::{Result, SequencingRecordBuilder};
-    /// # fn main() -> Result<()> {
-    /// let header = FileHeaderBuilder::new().slen(8).build()?;
-    /// let mut writer = WriterBuilder::default()
-    ///     .header(header)
-    ///     .build(Vec::new())?;
-    ///
-    /// let record = SequencingRecordBuilder::default()
-    ///     .s_seq(b"ACGTACGT")
-    ///     .flag(42)
-    ///     .build()?;
-    ///
-    /// writer.push(record)?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// BQ does not store quality scores or headers; those fields are ignored.
     pub fn push(&mut self, record: SequencingRecord) -> Result<bool> {
         let has_flag = self.header.flags;
         if has_flag {
@@ -267,76 +182,28 @@ impl<W: Write> Writer<W> {
     }
 
     /// Consumes the writer and returns the underlying writer
-    ///
-    /// This is useful when you need to access the underlying writer after
-    /// writing is complete, for example to get the contents of a `Vec<u8>`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use binseq::bq::{FileHeaderBuilder, WriterBuilder};
-    /// # use binseq::Result;
-    /// # fn main() -> Result<()> {
-    /// let header = FileHeaderBuilder::new().slen(100).build()?;
-    /// let writer = WriterBuilder::default()
-    ///     .header(header)
-    ///     .build(Vec::new())?;
-    ///
-    /// // After writing sequences...
-    /// let bytes = writer.into_inner();
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn into_inner(self) -> W {
         self.inner
     }
 
     /// Gets a mutable reference to the underlying writer
-    ///
-    /// This allows direct access to the underlying writer while retaining
-    /// ownership of the `Writer`.
     pub fn by_ref(&mut self) -> &mut W {
         &mut self.inner
     }
 
     /// Flushes any buffered data to the underlying writer
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the flush was successful
-    /// * `Err(Error)` - If flushing failed
     pub fn flush(&mut self) -> Result<()> {
         self.inner.flush()?;
         Ok(())
     }
 
-    /// Checks if this writer is in headless mode
-    ///
-    /// In headless mode, the writer does not write the header to the output.
-    /// This is useful for parallel writing scenarios where only one writer
-    /// should write the header.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the writer is in headless mode, `false` otherwise
+    /// Checks if this writer is in headless mode (header not written)
     pub fn is_headless(&self) -> bool {
         self.headless
     }
 
-    /// Ingests the contents of another writer's buffer
-    ///
-    /// This method is used in parallel writing scenarios to combine the output
-    /// of multiple writers. It takes the contents of another writer's buffer
-    /// and writes them to this writer's output.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - Another writer whose underlying writer is a `Vec<u8>`
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the contents were successfully ingested
-    /// * `Err(Error)` - If writing the contents failed
+    /// Drains another writer's buffer into this writer's output, for
+    /// combining parallel writers.
     pub fn ingest(&mut self, other: &mut Writer<Vec<u8>>) -> Result<()> {
         let other_inner = other.by_ref();
         self.inner.write_all(other_inner)?;

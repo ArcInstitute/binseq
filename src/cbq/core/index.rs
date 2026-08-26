@@ -176,7 +176,7 @@ impl Index {
     }
 }
 
-/// A struct representing a block range in a CBQ file and stored in the [`Index`](crate::cbq::Index)
+/// A block range stored in the [`Index`](crate::cbq::Index).
 ///
 /// This is stored identically in memory and on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod, Default)]

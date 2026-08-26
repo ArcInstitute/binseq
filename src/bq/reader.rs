@@ -1,11 +1,4 @@
-//! Binary sequence reader module
-//!
-//! This module provides functionality for reading binary sequence files using either:
-//! 1. Memory mapping for efficient access to entire files
-//! 2. Streaming for processing data as it arrives
-//!
-//! It supports both sequential and parallel processing of records,
-//! with configurable record layouts for different sequence types.
+//! BQ readers: memory-mapped ([`MmapReader`]) and streaming ([`StreamReader`]).
 
 use std::fs::File;
 use std::io::Read;
@@ -23,25 +16,19 @@ use crate::{
     error::{ReadError, Result},
 };
 
-/// A reference to a binary sequence record in a memory-mapped file
+/// A zero-copy view of a single record in a memory-mapped BQ file.
 ///
-/// This struct provides a view into a single record within a binary sequence file,
-/// allowing access to the record's components (sequence data, flags, etc.) without
-/// copying the data from the memory-mapped file.
-///
-/// The record's data is stored in a compact binary format where:
-/// - The first u64 contains flags
-/// - Subsequent u64s contain the primary sequence data
-/// - If present, final u64s contain the extended sequence data
+/// Layout: an optional leading flag u64, then primary sequence u64s,
+/// then extended sequence u64s (if paired).
 #[derive(Clone, Copy)]
 pub struct RefRecord<'a> {
-    /// The position (index) of this record in the file (0-based record index, not byte offset)
+    /// 0-based record index (not byte offset)
     id: u64,
-    /// The underlying u64 buffer representing the record's binary data
+    /// The record's binary data as u64 words
     buffer: &'a [u64],
     /// Reusable default quality buffer
     qbuf: &'a [u8],
-    /// The configuration that defines the layout and size of record components
+    /// Layout configuration for the record
     config: RecordConfig,
     /// Cached index string for the sequence header
     header_buf: [u8; 20],
@@ -50,12 +37,6 @@ pub struct RefRecord<'a> {
 }
 impl<'a> RefRecord<'a> {
     /// Creates a new record reference
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The record's position in the file (0-based record index, not byte offset)
-    /// * `buffer` - The u64 slice containing the record's binary data
-    /// * `config` - Configuration defining the record's layout
     ///
     /// # Panics
     ///
@@ -81,12 +62,9 @@ impl BinseqRecord for RefRecord<'_> {
     fn index(&self) -> u64 {
         self.id
     }
-    /// Clear the buffer and fill it with the sequence header
     fn sheader(&self) -> &[u8] {
         &self.header_buf[..self.header_len]
     }
-
-    /// Clear the buffer and fill it with the extended header
     fn xheader(&self) -> &[u8] {
         self.sheader()
     }
@@ -169,7 +147,7 @@ impl BinseqRecord for BatchRecord<'_> {
         dbuf.extend_from_slice(self.xseq());
         Ok(())
     }
-    /// Override this method since we can make use of block information
+    /// Overridden to slice the precomputed batch-decoded buffer
     fn sseq(&self) -> &[u8] {
         let config = &self.inner.config;
         let scalar = config.scalar();
@@ -181,7 +159,7 @@ impl BinseqRecord for BatchRecord<'_> {
         }
         self.dbuf.get(lbound..rbound).unwrap_or_default()
     }
-    /// Override this method since we can make use of block information
+    /// Overridden to slice the precomputed batch-decoded buffer
     fn xseq(&self) -> &[u8] {
         let config = &self.inner.config;
         let scalar = config.scalar();
@@ -201,45 +179,24 @@ impl BinseqRecord for BatchRecord<'_> {
     }
 }
 
-/// Configuration for binary sequence record layout
-///
-/// This struct defines the size and layout of binary sequence records,
-/// including both primary sequence data and optional extended data.
-/// It handles the translation between sequence lengths in base pairs
-/// and the number of u64 chunks needed to store the compressed data.
+/// Size and layout of BQ records, mapping base-pair lengths to u64 chunks.
 #[derive(Clone, Copy)]
 pub(crate) struct RecordConfig {
-    /// The primary sequence length in base pairs
+    /// Primary sequence length in base pairs
     slen: u64,
-    /// The extended sequence length in base pairs
+    /// Extended sequence length in base pairs
     xlen: u64,
-    /// The number of u64 chunks needed to store the primary sequence
-    /// (each u64 stores 32 nucleotides)
+    /// u64 chunks needed for the primary sequence
     schunk: u64,
-    /// The number of u64 chunks needed to store the extended sequence
-    /// (each u64 stores 32 values)
+    /// u64 chunks needed for the extended sequence
     xchunk: u64,
-    /// The bitsize of the record
+    /// Bits per nucleotide
     bitsize: BitSize,
     /// Whether flags are present
     flags: bool,
 }
 impl RecordConfig {
     /// Creates a new record configuration
-    ///
-    /// This constructor initializes a configuration for a binary sequence record
-    /// with specified primary and extended sequence lengths.
-    ///
-    /// # Arguments
-    ///
-    /// * `slen` - The length of primary sequences in the file
-    /// * `xlen` - The length of secondary/extended sequences in the file
-    /// * `bitsize` - The bitsize of the record
-    /// * `flags` - Whether flags are present
-    ///
-    /// # Returns
-    ///
-    /// A new `RecordConfig` instance with the specified sequence lengths
     pub fn new(slen: usize, xlen: usize, bitsize: BitSize, flags: bool) -> Self {
         let (schunk, xchunk) = match bitsize {
             BitSize::Two => (slen.div_ceil(32), xlen.div_ceil(32)),
@@ -255,18 +212,7 @@ impl RecordConfig {
         }
     }
 
-    /// Creates a new record configuration from a header
-    ///
-    /// This constructor initializes a configuration based on a header that contains
-    /// the sequence lengths for primary and extended sequences.
-    ///
-    /// # Arguments
-    ///
-    /// * `header` - A reference to a `FileHeader` containing sequence lengths
-    ///
-    /// # Returns
-    ///
-    /// A new `RecordConfig` instance with the sequence lengths from the header
+    /// Creates a record configuration from a file header
     pub fn from_header(header: &FileHeader) -> Self {
         Self::new(
             header.slen as usize,
@@ -276,44 +222,32 @@ impl RecordConfig {
         )
     }
 
-    /// Returns the primary sequence length in base pairs
-    ///
-    /// This method returns the length of the primary sequence in base pairs.
+    /// Primary sequence length in base pairs
     pub fn slen(&self) -> usize {
         self.slen as usize
     }
 
-    /// Returns the extended sequence length in base pairs
-    ///
-    /// This method returns the length of the extended sequence in base pairs.
+    /// Extended sequence length in base pairs
     pub fn xlen(&self) -> usize {
         self.xlen as usize
     }
 
-    /// Returns the number of u64 chunks needed to store the primary sequence
-    ///
-    /// This method returns the number of u64 chunks required to store the primary
-    /// sequence, where each u64 stores 32 nucleotides.
+    /// u64 chunks needed for the primary sequence
     pub fn schunk(&self) -> usize {
         self.schunk as usize
     }
 
-    /// Returns the number of u64 chunks needed to store the extended sequence
-    ///
-    /// This method returns the number of u64 chunks required to store the extended
-    /// sequence, where each u64 stores 32 values.
+    /// u64 chunks needed for the extended sequence
     pub fn xchunk(&self) -> usize {
         self.xchunk as usize
     }
 
-    /// Returns the full record size in bytes (u8):
-    /// 8 * (schunk + xchunk + 1 (flag))
+    /// Full record size in bytes
     pub fn record_size_bytes(&self) -> usize {
         8 * self.record_size_u64()
     }
 
-    /// Returns the full record size in u64
-    /// schunk + xchunk + 1 (flag)
+    /// Full record size in u64 words (schunk + xchunk + optional flag word)
     pub fn record_size_u64(&self) -> usize {
         if self.flags {
             (self.schunk + self.xchunk + 1) as usize
@@ -331,16 +265,9 @@ impl RecordConfig {
     }
 }
 
-/// A memory-mapped reader for binary sequence files
+/// A memory-mapped reader for BQ files
 ///
-/// This reader provides efficient access to binary sequence files by memory-mapping
-/// them instead of performing traditional I/O operations. It supports both
-/// sequential access to individual records and parallel processing of records
-/// across multiple threads.
-///
-/// The reader ensures thread-safety through the use of `Arc` for sharing the
-/// memory-mapped data between threads.
-///
+/// Supports random access to individual records and parallel processing.
 /// Records are returned as [`RefRecord`] which implement the [`BinseqRecord`] trait.
 ///
 /// # Examples
@@ -350,27 +277,20 @@ impl RecordConfig {
 /// use binseq::Result;
 ///
 /// fn main() -> Result<()> {
-///     let path = "./data/subset.bq";
-///     let reader = MmapReader::new(path)?;
-///
-///     // Calculate the number of records in the file
-///     let num_records = reader.num_records();
-///     println!("Number of records: {}", num_records);
-///
-///     // Get the record at index 20 (0-indexed)
+///     let reader = MmapReader::new("./data/subset.bq")?;
+///     println!("Number of records: {}", reader.num_records());
 ///     let record = reader.get(20)?;
-///
 ///     Ok(())
 /// }
 /// ```
 pub struct MmapReader {
-    /// Memory mapped file contents, wrapped in Arc for thread-safe sharing
+    /// Memory-mapped file contents
     mmap: Arc<Mmap>,
 
-    /// Binary sequence file header containing format information
+    /// File header
     header: FileHeader,
 
-    /// Configuration defining the layout of records in the file
+    /// Record layout configuration
     config: RecordConfig,
 
     /// Reusable buffer for quality scores
@@ -381,27 +301,7 @@ pub struct MmapReader {
 }
 
 impl MmapReader {
-    /// Creates a new memory-mapped reader for a binary sequence file
-    ///
-    /// This method opens the file, memory-maps its contents, and validates
-    /// the file structure to ensure it contains valid binary sequence data.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the binary sequence file
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(MmapReader)` - A new reader if the file is valid
-    /// * `Err(Error)` - If the file is invalid or cannot be opened
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The file cannot be opened
-    /// * The file is not a regular file
-    /// * The file header is invalid
-    /// * The file size doesn't match the expected size based on the header
+    /// Opens and memory-maps a BQ file, validating its header and size.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Verify input file is a file before attempting to map
         let file = File::open(path)?;
@@ -436,17 +336,12 @@ impl MmapReader {
     }
 
     /// Returns the total number of records in the file
-    ///
-    /// This is calculated by subtracting the header size from the total file size
-    /// and dividing by the size of each record.
     #[must_use]
     pub fn num_records(&self) -> usize {
         (self.mmap.len() - SIZE_HEADER) / self.config.record_size_bytes()
     }
 
-    /// Returns a copy of the binary sequence file header
-    ///
-    /// The header contains format information and sequence length specifications.
+    /// Returns a copy of the file header
     #[must_use]
     pub fn header(&self) -> FileHeader {
         self.header
@@ -470,20 +365,7 @@ impl MmapReader {
         vec![self.default_quality_score; self.header.slen.max(self.header.xlen) as usize]
     }
 
-    /// Returns a reference to a specific record
-    ///
-    /// # Arguments
-    ///
-    /// * `idx` - The index of the record to retrieve (0-based)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(RefRecord)` - A reference to the requested record
-    /// * `Err(Error)` - If the index is out of bounds
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the requested index is beyond the number of records in the file
+    /// Returns a reference to the record at a 0-based index
     pub fn get(&self, idx: usize) -> Result<RefRecord<'_>> {
         if idx > self.num_records() {
             return Err(ReadError::OutOfRange {
@@ -500,10 +382,7 @@ impl MmapReader {
         Ok(RefRecord::new(idx as u64, buffer, &self.qbuf, self.config))
     }
 
-    /// Returns a slice of the buffer containing the underlying u64 for that range
-    /// of records.
-    ///
-    /// Note: range 10..40 will return all u64s in the mmap between the record index 10 and 40
+    /// Returns the underlying u64 slice spanning a range of record indices
     pub fn get_buffer_slice(&self, range: Range<usize>) -> Result<&[u64]> {
         if range.end > self.num_records() {
             return Err(ReadError::OutOfRange {
@@ -522,24 +401,19 @@ impl MmapReader {
     }
 }
 
-/// A reader for streaming binary sequence data from any source that implements Read
+/// A streaming BQ reader over any `Read` source
 ///
-/// Unlike `MmapReader` which requires the entire file to be accessible at once,
-/// `StreamReader` processes data as it becomes available, making it suitable for:
-/// - Processing data as it arrives over a network
-/// - Handling very large files that exceed available memory
-/// - Pipeline processing where data is flowing continuously
-///
-/// The reader maintains an internal buffer and can handle partial record reconstruction
-/// across chunk boundaries.
+/// Unlike [`MmapReader`], data is processed as it arrives, so it suits
+/// network streams, pipes, and files larger than memory. Records spanning
+/// buffer refills are handled transparently.
 pub struct StreamReader<R: Read> {
-    /// The source reader for binary sequence data
+    /// The source reader
     reader: R,
 
-    /// Binary sequence file header containing format information
+    /// File header (populated on first read)
     header: Option<FileHeader>,
 
-    /// Configuration defining the layout of records in the file
+    /// Record layout configuration (populated with the header)
     config: Option<RecordConfig>,
 
     /// Buffer for storing incoming data
@@ -567,35 +441,12 @@ pub struct StreamReader<R: Read> {
 }
 
 impl<R: Read> StreamReader<R> {
-    /// Creates a new `StreamReader` with the default buffer size
-    ///
-    /// This constructor initializes a `StreamReader` that will read from the provided
-    /// source, using an 8K default buffer size.
-    ///
-    /// # Arguments
-    ///
-    /// * `reader` - The source to read binary sequence data from
-    ///
-    /// # Returns
-    ///
-    /// A new `StreamReader` instance
+    /// Creates a new `StreamReader` with the default (8K) buffer size
     pub fn new(reader: R) -> Self {
         Self::with_capacity(reader, 8192)
     }
 
-    /// Creates a new `StreamReader` with a specified buffer capacity
-    ///
-    /// This constructor initializes a `StreamReader` with a custom buffer size,
-    /// which can be tuned based on the expected usage pattern.
-    ///
-    /// # Arguments
-    ///
-    /// * `reader` - The source to read binary sequence data from
-    /// * `capacity` - The size of the internal buffer in bytes
-    ///
-    /// # Returns
-    ///
-    /// A new `StreamReader` instance with the specified buffer capacity
+    /// Creates a new `StreamReader` with a specified buffer capacity in bytes
     pub fn with_capacity(reader: R, capacity: usize) -> Self {
         Self {
             reader,
@@ -618,26 +469,11 @@ impl<R: Read> StreamReader<R> {
         self.default_quality_score = score;
     }
 
-    /// Reads and validates the header from the underlying reader
-    ///
-    /// This method reads the binary sequence file header and validates it.
-    /// It caches the header internally for future use.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(&FileHeader)` - A reference to the validated header
-    /// * `Err(Error)` - If reading or validating the header fails
+    /// Reads, validates, and caches the file header
     ///
     /// # Panics
     ///
     /// Panics if the header is missing when expected in the stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * There is an I/O error when reading from the source
-    /// * The header data is invalid
-    /// * End of stream is reached before the full header can be read
     pub fn read_header(&mut self) -> Result<&FileHeader> {
         if self.header.is_none() {
             // Ensure we have enough data for the header
@@ -660,21 +496,7 @@ impl<R: Read> StreamReader<R> {
             .expect("header was just populated above"))
     }
 
-    /// Fills the internal buffer with more data from the reader
-    ///
-    /// This method reads more data from the underlying reader, handling
-    /// the case where some unprocessed data remains in the buffer.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the buffer was successfully filled with new data
-    /// * `Err(Error)` - If reading from the source fails
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * There is an I/O error when reading from the source
-    /// * End of stream is reached (no more data available)
+    /// Refills the internal buffer, shifting any unprocessed bytes to the front
     fn fill_buffer(&mut self) -> Result<()> {
         // Move remaining data to beginning of buffer if needed
         if self.buffer_pos > 0 && self.buffer_pos < self.buffer_len {
@@ -696,27 +518,11 @@ impl<R: Read> StreamReader<R> {
         Ok(())
     }
 
-    /// Retrieves the next record from the stream
-    ///
-    /// This method reads and processes the next complete record from the stream.
-    /// It handles the case where a record spans multiple buffer fills.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(RefRecord))` - The next record was successfully read
-    /// * `Ok(None)` - End of stream was reached (no more records)
-    /// * `Err(Error)` - If an error occurred during reading
+    /// Retrieves the next record from the stream, or `None` at end of stream
     ///
     /// # Panics
     ///
     /// Panics if the configuration is missing when expected in the stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * There is an I/O error when reading from the source
-    /// * The header has not been read yet
-    /// * The data format is invalid
     pub fn next_record(&mut self) -> Option<Result<RefRecord<'_>>> {
         // Ensure header is read
         if self.header.is_none()
@@ -769,45 +575,16 @@ impl<R: Read> StreamReader<R> {
     }
 
     /// Consumes the stream reader and returns the inner reader
-    ///
-    /// This method is useful when you need access to the underlying reader
-    /// after processing is complete.
-    ///
-    /// # Returns
-    ///
-    /// The inner reader that was used by this `StreamReader`
     pub fn into_inner(self) -> R {
         self.reader
     }
 }
 
-/// Default batch size for parallel processing
-///
-/// This constant defines how many records each thread processes at a time
-/// during parallel processing operations.
+/// Number of records each thread processes at a time during parallel processing
 pub(crate) const BATCH_SIZE: usize = 1024;
 
-/// Parallel processing implementation for memory-mapped readers
 impl ParallelReader for MmapReader {
-    /// Processes all records in parallel using multiple threads
-    ///
-    /// This method distributes the records across the specified number of threads
-    /// and processes them using the provided processor. Each thread receives its
-    /// own clone of the processor and processes a contiguous chunk of records.
-    ///
-    /// # Arguments
-    ///
-    /// * `processor` - The processor to use for handling records
-    /// * `num_threads` - The number of threads to use for processing
-    ///
-    /// # Type Parameters
-    ///
-    /// * `P` - A type that implements `ParallelProcessor` and can be cloned
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all records were processed successfully
-    /// * `Err(Error)` - If an error occurred during processing
+    /// Processes all records in parallel across the given number of threads
     fn process_parallel<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,
@@ -817,26 +594,7 @@ impl ParallelReader for MmapReader {
         self.process_parallel_range(processor, num_threads, 0..num_records)
     }
 
-    /// Process records in parallel within a specified range
-    ///
-    /// This method allows parallel processing of a subset of records within the file,
-    /// defined by a start and end index. The range is distributed across the specified
-    /// number of threads.
-    ///
-    /// # Arguments
-    ///
-    /// * `processor` - The processor to use for each record
-    /// * `num_threads` - The number of threads to spawn
-    /// * `range` - The range of record indices to process
-    ///
-    /// # Type Parameters
-    ///
-    /// * `P` - A type that implements `ParallelProcessor` and can be cloned
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all records were processed successfully
-    /// * `Err(Error)` - If an error occurred during processing
+    /// Processes a range of record indices in parallel
     fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,

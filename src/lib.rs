@@ -2,44 +2,17 @@
 #![cfg_attr(docsrs, doc(auto_cfg))]
 #![doc = include_str!("../README.md")]
 //!
-//! # BINSEQ
+//! # Library
 //!
-//! The `binseq` library provides efficient APIs for working with the [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) file format family.
+//! The `binseq` library provides efficient APIs for working with the [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) file format family:
 //!
-//! It offers methods to read and write BINSEQ files, providing:
+//! - **[`cbq`]** — the recommended variant: columnar, block-compressed, lossless by default
+//! - **[`bq`]** and **[`vbq`]** — earlier variants, still fully supported
+//! - [`BinseqRecord`], [`BinseqReader`], and [`BinseqWriter`] — variant-agnostic record, reader, and writer abstractions
+//! - [`ParallelProcessor`] — parallel processing of records with arbitrary per-record logic
+//! - [`Policy`] — configurable handling of invalid nucleotides when encoding BQ/VBQ (CBQ stores `N` natively)
 //!
-//! - Compact multi-bit encoding and decoding of nucleotide sequences through [`bitnuc`](https://docs.rs/bitnuc/latest/bitnuc/)
-//! - Support for both single and paired-end sequences
-//! - Abstract [`BinseqRecord`] trait for representing records from all variants
-//! - Abstract [`BinseqReader`] enum for processing records from all variants
-//! - Abstract [`BinseqWriter`] enum for writing records to all variants
-//! - Parallel processing capabilities for arbitrary tasks through the [`ParallelProcessor`] trait.
-//! - Configurable [`Policy`] for handling invalid nucleotides (BQ/VBQ, CBQ natively supports `N` nucleotides)
-//!
-//! ## Recent additions (v0.9.0):
-//!
-//! ### New variant: CBQ
-//! **[`cbq`]** is a new variant of BINSEQ that solves many of the pain points around VBQ.
-//! The CBQ format is a columnar-block-based format that offers improved compression and faster processing speeds compared to VBQ.
-//! It natively supports `N` nucleotides and avoids the need for additional 4-bit encoding.
-//!
-//! ### Improved interface for writing records
-//! **[`BinseqWriter`]** provides a unified interface for writing records generically to BINSEQ files.
-//! This makes use of the new [`SequencingRecord`] which provides a cleaner builder API for writing records to BINSEQ files.
-//!
-//! ## Recent VBQ Format Changes (v0.7.0+)
-//!
-//! The VBQ format has undergone significant improvements:
-//!
-//! - **Embedded Index**: VBQ files now contain their index data embedded at the end of the file,
-//!   improving portability.
-//! - **Headers Support**: Optional sequence identifiers/headers can be stored with each record.
-//! - **Extended Capacity**: u64 indexing supports files with more than 4 billion records.
-//! - **Multi-bit Encoding**: Support for both 2-bit and 4-bit nucleotide encodings.
-//!
-//! Legacy VBQ files are automatically migrated to the new format when accessed.
-//!
-//! # Example: Memory-mapped Access
+//! # Example: Parallel Processing
 //!
 //! ```
 //! use binseq::Result;
@@ -47,32 +20,29 @@
 //!
 //! #[derive(Clone, Default)]
 //! pub struct Processor {
-//!     // Define fields here
+//!     // per-thread state
 //! }
 //!
 //! impl ParallelProcessor for Processor {
 //!     fn process_record<B: BinseqRecord>(&mut self, record: B) -> Result<()> {
-//!         // Implement per-record logic here
+//!         // per-record logic
 //!         Ok(())
 //!     }
 //!
 //!     fn on_batch_complete(&mut self) -> Result<()> {
-//!         // Implement per-batch logic here
+//!         // per-batch logic (e.g. flush to a shared writer)
 //!         Ok(())
 //!     }
 //! }
 //!
 //! fn main() -> Result<()> {
-//!     // provide an input path (*.bq or *.vbq)
-//!     let path = "./data/subset.bq";
+//!     // any BINSEQ variant (*.cbq, *.bq, *.vbq); format is sniffed from content
+//!     let path = "./data/subset.cbq";
 //!
-//!     // open a reader
 //!     let reader = BinseqReader::new(path)?;
-//!
-//!     // initialize a processor
 //!     let processor = Processor::default();
 //!
-//!     // process the records in parallel with 8 threads
+//!     // process records in parallel with 8 threads
 //!     reader.process_parallel(processor, 8)?;
 //!     Ok(())
 //! }
@@ -80,8 +50,14 @@
 
 #![allow(clippy::module_inception)]
 
-/// BQ - fixed length records, no quality scores
+/// CBQ - columnar variable-length records, optional quality scores and headers
+pub mod cbq;
+
+/// BQ - fixed-length records, no quality scores
 pub mod bq;
+
+/// VBQ - variable-length records, optional quality scores, compressed blocks
+pub mod vbq;
 
 /// Shared nucleotide encoder for BQ/VBQ writers
 mod encoder;
@@ -98,13 +74,7 @@ mod policy;
 /// Record types and traits shared between BINSEQ variants
 mod record;
 
-/// VBQ - Variable length records, optional quality scores, compressed blocks
-pub mod vbq;
-
-/// CBQ - Columnar variable length records, optional quality scores and headers
-pub mod cbq;
-
-/// Prelude - Commonly used types and traits
+/// Commonly used types and traits
 pub mod prelude;
 
 /// Write operations generic over the BINSEQ variant
