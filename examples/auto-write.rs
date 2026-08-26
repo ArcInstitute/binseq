@@ -58,6 +58,10 @@ struct Args {
     /// Number of threads to use for parallel processing, 0: all available
     #[clap(short = 'T', long, default_value = "0")]
     threads: usize,
+
+    /// Disable ordering output records to match input order (small perf gain)
+    #[clap(long)]
+    unordered: bool,
 }
 impl Args {
     /// Determines the output format based on the file extension or the provided format
@@ -114,6 +118,7 @@ fn main() -> Result<()> {
         builder.input(&args.input)
     }
     .threads(args.threads)
+    .ordered(!args.unordered)
     .run()?;
 
     Ok(())
