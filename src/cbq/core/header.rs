@@ -147,6 +147,10 @@ impl FileHeaderBuilder {
         self
     }
 
+    pub fn with_compression_level(&mut self, compression_level: usize) -> &mut Self {
+        self.with_optional_compression_level(Some(compression_level))
+    }
+
     pub fn with_block_size(&mut self, block_size: usize) -> &mut Self {
         self.block_size = Some(block_size);
         self

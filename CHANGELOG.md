@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`&R` / `&mut R` impls of `BinseqRecord`**
   - the `auto_impl` dependency is dropped and nothing used the reference impls;
   - pass records by value (they are already references anyways).
-- Dead accessors throughout (`RefRecord::{config, set_id}`, `cbq` writer `usage` / `bytes_written`, `with_compression_level`, and similar zero-caller items), plus the redundant `streaming` and `write` examples.
+- Dead accessors throughout (`RefRecord::{config, set_id}`, `cbq` writer `usage` / `bytes_written`, and similar zero-caller items), plus the redundant `streaming` and `write` examples.
 
 ### Changed
 
