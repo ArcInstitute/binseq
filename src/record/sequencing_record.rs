@@ -270,6 +270,7 @@ impl<'a> SequencingRecordBuilder<'a> {
     }
 
     /// Sets the primary header from an Option
+    #[must_use]
     pub fn opt_s_header(mut self, s_header: Option<&'a [u8]>) -> Self {
         self.s_header = s_header;
         self
