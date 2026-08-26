@@ -61,7 +61,7 @@ impl<'a> RefRecord<'a> {
     ///
     /// Panics if the buffer length doesn't match the expected size from the config
     #[must_use]
-    pub fn new(id: u64, buffer: &'a [u64], qbuf: &'a [u8], config: RecordConfig) -> Self {
+    pub(crate) fn new(id: u64, buffer: &'a [u64], qbuf: &'a [u8], config: RecordConfig) -> Self {
         assert_eq!(buffer.len(), config.record_size_u64());
         Self {
             id,
@@ -127,7 +127,7 @@ impl BinseqRecord for RefRecord<'_> {
 }
 
 /// A reference to a record in the map with a precomputed decoded buffer slice
-pub struct BatchRecord<'a> {
+pub(crate) struct BatchRecord<'a> {
     /// The underlying record view (encoded buffer, config, header)
     inner: RefRecord<'a>,
     /// Decoded buffer slice
@@ -208,7 +208,7 @@ impl BinseqRecord for BatchRecord<'_> {
 /// It handles the translation between sequence lengths in base pairs
 /// and the number of u64 chunks needed to store the compressed data.
 #[derive(Clone, Copy)]
-pub struct RecordConfig {
+pub(crate) struct RecordConfig {
     /// The primary sequence length in base pairs
     slen: u64,
     /// The extended sequence length in base pairs
@@ -785,7 +785,7 @@ impl<R: Read> StreamReader<R> {
 ///
 /// This constant defines how many records each thread processes at a time
 /// during parallel processing operations.
-pub const BATCH_SIZE: usize = 1024;
+pub(crate) const BATCH_SIZE: usize = 1024;
 
 /// Parallel processing implementation for memory-mapped readers
 impl ParallelReader for MmapReader {

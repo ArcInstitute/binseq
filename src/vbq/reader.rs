@@ -54,10 +54,9 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::utils::read_u64_le;
 use bitnuc_deprec::BitSize;
 use memmap2::Mmap;
-
-use crate::utils::read_u64_le;
 use zstd::zstd_safe;
 
 use super::{
@@ -98,7 +97,7 @@ fn encoded_sequence_len(len: u64, bitsize: BitSize) -> usize {
 
 /// Represents a span (offset, length) into a buffer
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Span {
+pub(crate) struct Span {
     offset: usize,
     len: usize,
 }
