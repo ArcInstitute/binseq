@@ -417,10 +417,10 @@ mod tests {
             let qual: String = std::iter::repeat_n('F', SEQ_LEN).collect();
             let _ = writeln!(fastq, "@read_{i:06}\n{seq}\n+\n{qual}");
         }
+        let temp_dir = tempfile::tempdir().unwrap();
 
-        let pid = std::process::id();
-        let input_path = std::env::temp_dir().join(format!("binseq_ordered_input_{pid}.fastq"));
-        let output_path = std::env::temp_dir().join(format!("binseq_ordered_output_{pid}.cbq"));
+        let input_path = temp_dir.path().join("input.fastq");
+        let output_path = temp_dir.path().join("output.cbq");
         std::fs::write(&input_path, &fastq).unwrap();
 
         let builder = BinseqWriterBuilder::new(Format::Cbq).headers(true);
@@ -430,14 +430,12 @@ mod tests {
             .threads(4)
             .ordered(true)
             .run();
-        std::fs::remove_file(&input_path).unwrap();
         assert!(result.is_ok());
 
         let reader = BinseqReader::new(&output_path).unwrap();
         let processor = HeaderCollector::default();
         let headers = processor.headers.clone();
         reader.process_parallel(processor, 4).unwrap();
-        std::fs::remove_file(&output_path).unwrap();
 
         let mut results = Arc::try_unwrap(headers).unwrap().into_inner();
         results.sort_by_key(|(idx, _)| *idx);
