@@ -8,7 +8,7 @@ use bitnuc_deprec::BitSize;
 use byteorder::{ByteOrder, LittleEndian};
 use std::io::{Read, Write};
 
-use crate::error::{BuilderError, HeaderError, Result};
+use crate::error::{HeaderError, Result};
 
 /// Current magic number: "BSEQ" in ASCII (in little-endian byte order)
 ///
@@ -86,7 +86,7 @@ impl FileHeaderBuilder {
             slen: if let Some(slen) = self.slen {
                 slen
             } else {
-                return Err(BuilderError::MissingSlen.into());
+                return Err(HeaderError::MissingSequenceLength.into());
             },
             xlen: self.xlen.unwrap_or(0),
             bits: self.bitsize.unwrap_or_default(),

@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use crate::{
     BinseqWriter, BinseqWriterBuilder, IntoBinseqError, Result, SequencingRecordBuilder,
-    error::FastxEncodingError,
+    error::WriteError,
 };
 
 type BoxedRead = Box<dyn Read + Send>;
@@ -211,7 +211,7 @@ impl FastxEncoderBuilder {
                 self.builder = self.builder.slen(slen as u32).xlen(xlen as u32);
                 (reader1, Some(reader2))
             }
-            None => return Err(FastxEncodingError::MissingInput.into()),
+            None => return Err(WriteError::MissingInput.into()),
         };
 
         let writer = self.builder.build(self.output)?;
@@ -286,13 +286,13 @@ fn detect_seq_len(
             let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
             Ok(rec.seq().len())
         }) else {
-            return Err(FastxEncodingError::EmptyFastxFile.into());
+            return Err(WriteError::EmptyFastxFile.into());
         };
         let Some(Ok(xlen)) = rset_iter.next().map(|r| -> Result<usize> {
             let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
             Ok(rec.seq().len())
         }) else {
-            return Err(FastxEncodingError::EmptyFastxFile.into());
+            return Err(WriteError::EmptyFastxFile.into());
         };
         (slen, xlen)
     } else {
@@ -301,7 +301,7 @@ fn detect_seq_len(
             let rec = r.map_err(IntoBinseqError::into_binseq_error)?;
             Ok(rec.seq().len())
         }) else {
-            return Err(FastxEncodingError::EmptyFastxFile.into());
+            return Err(WriteError::EmptyFastxFile.into());
         };
         (slen, 0)
     };
