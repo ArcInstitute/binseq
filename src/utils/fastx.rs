@@ -355,6 +355,15 @@ impl<Rf: Record> ParallelProcessor<Rf> for Encoder {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Only drain completed blocks mid-stream (keeps CBQ blocks full)
+        self.writer
+            .lock()
+            .ingest_completed(&mut self.thread_writer)
+            .map_err(IntoProcessError::into_process_error)?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         self.writer
             .lock()
             .ingest(&mut self.thread_writer)
@@ -384,6 +393,15 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for Encoder {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Only drain completed blocks mid-stream (keeps CBQ blocks full)
+        self.writer
+            .lock()
+            .ingest_completed(&mut self.thread_writer)
+            .map_err(IntoProcessError::into_process_error)?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         self.writer
             .lock()
             .ingest(&mut self.thread_writer)
