@@ -34,8 +34,9 @@
 
 use std::io::{Cursor, Read, Write};
 
-use byteorder::{ByteOrder, LittleEndian};
 use zstd::{Decoder, Encoder};
+
+use crate::utils::{read_u32_le, read_u64_le};
 
 use crate::error::{IndexError, Result};
 
@@ -174,10 +175,10 @@ impl BlockRange {
     /// * `Err(_)` - If an error occurred during writing
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buf = [0; SIZE_BLOCK_RANGE];
-        LittleEndian::write_u64(&mut buf[0..8], self.start_offset);
-        LittleEndian::write_u64(&mut buf[8..16], self.len);
-        LittleEndian::write_u32(&mut buf[16..20], self.block_records);
-        LittleEndian::write_u64(&mut buf[20..28], self.cumulative_records);
+        buf[0..8].copy_from_slice(&self.start_offset.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.len.to_le_bytes());
+        buf[16..20].copy_from_slice(&self.block_records.to_le_bytes());
+        buf[20..28].copy_from_slice(&self.cumulative_records.to_le_bytes());
         buf[28..].copy_from_slice(&self.reservation);
         writer.write_all(&buf)?;
         Ok(())
@@ -207,10 +208,10 @@ impl BlockRange {
     #[must_use]
     pub fn from_exact(buffer: &[u8; SIZE_BLOCK_RANGE]) -> Self {
         Self {
-            start_offset: LittleEndian::read_u64(&buffer[0..8]),
-            len: LittleEndian::read_u64(&buffer[8..16]),
-            block_records: LittleEndian::read_u32(&buffer[16..20]),
-            cumulative_records: LittleEndian::read_u64(&buffer[20..28]),
+            start_offset: read_u64_le(&buffer[0..8]),
+            len: read_u64_le(&buffer[8..16]),
+            block_records: read_u32_le(&buffer[16..20]),
+            cumulative_records: read_u64_le(&buffer[20..28]),
             reservation: INDEX_RESERVATION,
         }
     }
@@ -307,8 +308,8 @@ impl IndexHeader {
     pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self> {
         let mut buffer = [0; INDEX_HEADER_SIZE];
         reader.read_exact(&mut buffer)?;
-        let magic = LittleEndian::read_u64(&buffer[0..8]);
-        let bytes = LittleEndian::read_u64(&buffer[8..16]);
+        let magic = read_u64_le(&buffer[0..8]);
+        let bytes = read_u64_le(&buffer[8..16]);
         let Ok(reserved) = buffer[16..INDEX_HEADER_SIZE].try_into() else {
             return Err(IndexError::InvalidReservedBytes.into());
         };
@@ -350,8 +351,8 @@ impl IndexHeader {
     /// - Bytes 16-31: reserved for future extensions
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0; INDEX_HEADER_SIZE];
-        LittleEndian::write_u64(&mut buffer[0..8], self.magic);
-        LittleEndian::write_u64(&mut buffer[8..16], self.bytes);
+        buffer[0..8].copy_from_slice(&self.magic.to_le_bytes());
+        buffer[8..16].copy_from_slice(&self.bytes.to_le_bytes());
         buffer[16..].copy_from_slice(&self.reserved);
         writer.write_all(&buffer)?;
         Ok(())
@@ -555,7 +556,7 @@ mod tests {
     #[test]
     fn test_index_header_from_reader_invalid_magic() {
         let mut buffer = [0u8; INDEX_HEADER_SIZE];
-        LittleEndian::write_u64(&mut buffer[0..8], 0xDEAD_BEEF);
+        buffer[0..8].copy_from_slice(&0xDEAD_BEEF_u64.to_le_bytes());
         let result = IndexHeader::from_reader(&mut Cursor::new(buffer));
         assert!(result.is_err());
     }

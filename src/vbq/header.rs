@@ -15,9 +15,11 @@
 use std::io::{Read, Write};
 
 use bitnuc_deprec::BitSize;
-use byteorder::{ByteOrder, LittleEndian};
 
-use crate::error::{HeaderError, ReadError, Result};
+use crate::{
+    error::{HeaderError, ReadError, Result},
+    utils::{read_u32_le, read_u64_le},
+};
 
 /// Magic number for file identification: "VSEQ" in ASCII (0x51455356)
 ///
@@ -249,7 +251,7 @@ impl FileHeader {
     /// * `HeaderError::InvalidFormatVersion` - If the format version is unsupported
     /// * `HeaderError::InvalidReservedBytes` - If the reserved bytes section is invalid
     pub fn from_bytes(buffer: &[u8; SIZE_HEADER]) -> Result<Self> {
-        let magic = LittleEndian::read_u32(&buffer[0..4]);
+        let magic = read_u32_le(&buffer[0..4]);
         if magic != MAGIC {
             return Err(HeaderError::InvalidMagicNumber(magic).into());
         }
@@ -257,7 +259,7 @@ impl FileHeader {
         if format != FORMAT {
             return Err(HeaderError::InvalidFormatVersion(format).into());
         }
-        let block = LittleEndian::read_u64(&buffer[5..13]);
+        let block = read_u64_le(&buffer[5..13]);
         let qual = buffer[13] != 0;
         let compressed = buffer[14] != 0;
         let paired = buffer[15] != 0;
@@ -306,9 +308,9 @@ impl FileHeader {
     /// * IO errors if writing to the writer fails
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_HEADER];
-        LittleEndian::write_u32(&mut buffer[0..4], self.magic);
+        buffer[0..4].copy_from_slice(&self.magic.to_le_bytes());
         buffer[4] = self.format;
-        LittleEndian::write_u64(&mut buffer[5..13], self.block);
+        buffer[5..13].copy_from_slice(&self.block.to_le_bytes());
         buffer[13] = self.qual.into();
         buffer[14] = self.compressed.into();
         buffer[15] = self.paired.into();
@@ -442,9 +444,9 @@ impl BlockHeader {
     /// * IO errors if writing to the writer fails
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_BLOCK_HEADER];
-        LittleEndian::write_u64(&mut buffer[0..8], self.magic);
-        LittleEndian::write_u64(&mut buffer[8..16], self.size);
-        LittleEndian::write_u32(&mut buffer[16..20], self.records);
+        buffer[0..8].copy_from_slice(&self.magic.to_le_bytes());
+        buffer[8..16].copy_from_slice(&self.size.to_le_bytes());
+        buffer[16..20].copy_from_slice(&self.records.to_le_bytes());
         buffer[20..].copy_from_slice(&self.reserved);
         writer.write_all(&buffer)?;
         Ok(())
@@ -467,12 +469,12 @@ impl BlockHeader {
     ///
     /// * `ReadError::InvalidBlockMagicNumber` - If the magic number doesn't match "BLOCKSEQ"
     pub fn from_bytes(buffer: &[u8; SIZE_BLOCK_HEADER]) -> Result<Self> {
-        let magic = LittleEndian::read_u64(&buffer[0..8]);
+        let magic = read_u64_le(&buffer[0..8]);
         if magic != BLOCK_MAGIC {
             return Err(ReadError::InvalidBlockMagicNumber(magic, 0).into());
         }
-        let size = LittleEndian::read_u64(&buffer[8..16]);
-        let records = LittleEndian::read_u32(&buffer[16..20]);
+        let size = read_u64_le(&buffer[8..16]);
+        let records = read_u32_le(&buffer[16..20]);
         Ok(Self::new(size, records))
     }
 

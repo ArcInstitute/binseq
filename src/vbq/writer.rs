@@ -65,7 +65,6 @@
 use std::io::Write;
 
 use bitnuc_deprec::BitSize;
-use byteorder::{LittleEndian, WriteBytesExt};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use zstd::stream::copy_encode;
@@ -747,10 +746,10 @@ impl<W: Write> Writer<W> {
         self.inner.write_all(&buffer)?;
 
         // Write the number of bytes written to the index
-        self.inner.write_u64::<LittleEndian>(n_bytes)?;
+        self.inner.write_all(&n_bytes.to_le_bytes())?;
 
         // Write the index footer magic
-        self.inner.write_u64::<LittleEndian>(INDEX_END_MAGIC)?;
+        self.inner.write_all(&INDEX_END_MAGIC.to_le_bytes())?;
 
         Ok(())
     }
@@ -902,20 +901,20 @@ impl BlockWriter {
     }
 
     fn write_flag(&mut self, flag: u64) -> Result<()> {
-        self.ubuf.write_u64::<LittleEndian>(flag)?;
+        self.ubuf.write_all(&flag.to_le_bytes())?;
         self.pos += 8;
         Ok(())
     }
 
     fn write_length(&mut self, length: u64) -> Result<()> {
-        self.ubuf.write_u64::<LittleEndian>(length)?;
+        self.ubuf.write_all(&length.to_le_bytes())?;
         self.pos += 8;
         Ok(())
     }
 
     fn write_buffer(&mut self, ebuf: &[u64]) -> Result<()> {
         ebuf.iter()
-            .try_for_each(|&x| self.ubuf.write_u64::<LittleEndian>(x))?;
+            .try_for_each(|&x| self.ubuf.write_all(&x.to_le_bytes()))?;
         self.pos += 8 * ebuf.len();
         Ok(())
     }
@@ -1170,6 +1169,7 @@ impl Encoder {
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::read_u64_le;
     use super::*;
     use crate::SequencingRecordBuilder;
     use crate::vbq::{FileHeaderBuilder, header::SIZE_HEADER};
@@ -1483,7 +1483,6 @@ mod tests {
     #[test]
     fn test_index_always_written_on_finish() -> super::Result<()> {
         use crate::vbq::index::INDEX_END_MAGIC;
-        use byteorder::{ByteOrder, LittleEndian};
 
         // Create a writer with some records
         let header = FileHeaderBuilder::new().build();
@@ -1507,7 +1506,7 @@ mod tests {
         // Verify the file ends with the index magic number
         assert!(bytes.len() >= 8, "File is too short to contain index");
         let magic_offset = bytes.len() - 8;
-        let magic = LittleEndian::read_u64(&bytes[magic_offset..]);
+        let magic = read_u64_le(&bytes[magic_offset..]);
         assert_eq!(
             magic, INDEX_END_MAGIC,
             "Index magic number not found at end of file"
@@ -1516,7 +1515,7 @@ mod tests {
         // Verify we can read the index size
         assert!(bytes.len() >= 16, "File is too short to contain index size");
         let size_offset = bytes.len() - 16;
-        let index_size = LittleEndian::read_u64(&bytes[size_offset..size_offset + 8]);
+        let index_size = read_u64_le(&bytes[size_offset..size_offset + 8]);
         assert!(index_size > 0, "Index size should be greater than 0");
 
         // Verify the index size makes sense (should be less than total file size)
@@ -1531,7 +1530,6 @@ mod tests {
     #[test]
     fn test_finish_idempotent() -> super::Result<()> {
         use crate::vbq::index::INDEX_END_MAGIC;
-        use byteorder::{ByteOrder, LittleEndian};
 
         // Create a writer
         let header = FileHeaderBuilder::new().build();
@@ -1563,7 +1561,7 @@ mod tests {
         // Verify only one index magic number at the end
         let bytes = &writer.inner;
         let magic_offset = bytes.len() - 8;
-        let magic = LittleEndian::read_u64(&bytes[magic_offset..]);
+        let magic = read_u64_le(&bytes[magic_offset..]);
         assert_eq!(magic, INDEX_END_MAGIC);
 
         Ok(())

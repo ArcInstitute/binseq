@@ -55,8 +55,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bitnuc_deprec::BitSize;
-use byteorder::{ByteOrder, LittleEndian};
 use memmap2::Mmap;
+
+use crate::utils::read_u64_le;
 use zstd::zstd_safe;
 
 use super::{
@@ -370,7 +371,7 @@ impl RecordBlock {
 
             // Read flag
             let flag = if has_flags {
-                let flag = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+                let flag = read_u64_le(&bytes[pos..pos + 8]);
                 pos += 8;
                 Some(flag)
             } else {
@@ -378,9 +379,9 @@ impl RecordBlock {
             };
 
             // Read lengths
-            let slen = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+            let slen = read_u64_le(&bytes[pos..pos + 8]);
             pos += 8;
-            let xlen = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+            let xlen = read_u64_le(&bytes[pos..pos + 8]);
             pos += 8;
 
             // Check for end of records
@@ -395,7 +396,7 @@ impl RecordBlock {
             // Primary sequence - store span into sequences Vec
             let s_seq_span = Span::new(self.sequences.len(), s_seq_words);
             for _ in 0..s_seq_words {
-                let val = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+                let val = read_u64_le(&bytes[pos..pos + 8]);
                 self.sequences.push(val);
                 pos += 8;
             }
@@ -411,7 +412,7 @@ impl RecordBlock {
 
             // Primary header - store span into rbuf
             let s_header_span = if has_header {
-                let header_len = LittleEndian::read_u64(&bytes[pos..pos + 8]) as usize;
+                let header_len = read_u64_le(&bytes[pos..pos + 8]) as usize;
                 pos += 8;
                 let span = Span::new(pos, header_len);
                 pos += header_len;
@@ -423,7 +424,7 @@ impl RecordBlock {
             // Extended sequence - store span into sequences Vec
             let x_seq_span = Span::new(self.sequences.len(), x_seq_words);
             for _ in 0..x_seq_words {
-                let val = LittleEndian::read_u64(&bytes[pos..pos + 8]);
+                let val = read_u64_le(&bytes[pos..pos + 8]);
                 self.sequences.push(val);
                 pos += 8;
             }
@@ -439,7 +440,7 @@ impl RecordBlock {
 
             // Extended header - store span into rbuf
             let x_header_span = if has_header && xlen > 0 {
-                let header_len = LittleEndian::read_u64(&bytes[pos..pos + 8]) as usize;
+                let header_len = read_u64_le(&bytes[pos..pos + 8]) as usize;
                 pos += 8;
                 let span = Span::new(pos, header_len);
                 pos += header_len;
@@ -1077,13 +1078,13 @@ impl MmapReader {
         let start_pos_index_size = start_pos_magic - 8;
 
         // Validate the magic number
-        let magic = LittleEndian::read_u64(&self.mmap[start_pos_magic..]);
+        let magic = read_u64_le(&self.mmap[start_pos_magic..]);
         if magic != INDEX_END_MAGIC {
             return Err(ReadError::MissingIndexEndMagic.into());
         }
 
         // Get the index size
-        let index_size = LittleEndian::read_u64(&self.mmap[start_pos_index_size..start_pos_magic]);
+        let index_size = read_u64_le(&self.mmap[start_pos_index_size..start_pos_magic]);
 
         // Determine the start position of the index bytes
         let start_pos_index = start_pos_index_size - index_size as usize;

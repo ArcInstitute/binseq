@@ -5,10 +5,12 @@
 //! sequence length, and other information necessary for proper interpretation of the data.
 
 use bitnuc_deprec::BitSize;
-use byteorder::{ByteOrder, LittleEndian};
 use std::io::{Read, Write};
 
-use crate::error::{HeaderError, Result};
+use crate::{
+    error::{HeaderError, Result},
+    utils::read_u32_le,
+};
 
 /// Current magic number: "BSEQ" in ASCII (in little-endian byte order)
 ///
@@ -168,7 +170,7 @@ impl FileHeader {
     /// * The format version is unsupported
     /// * The reserved bytes are invalid
     pub fn from_bytes(buffer: &[u8; SIZE_HEADER]) -> Result<Self> {
-        let magic = LittleEndian::read_u32(&buffer[0..4]);
+        let magic = read_u32_le(&buffer[0..4]);
         if magic != MAGIC {
             return Err(HeaderError::InvalidMagicNumber(magic).into());
         }
@@ -176,8 +178,8 @@ impl FileHeader {
         if format != FORMAT {
             return Err(HeaderError::InvalidFormatVersion(format).into());
         }
-        let slen = LittleEndian::read_u32(&buffer[5..9]);
-        let xlen = LittleEndian::read_u32(&buffer[9..13]);
+        let slen = read_u32_le(&buffer[5..9]);
+        let xlen = read_u32_le(&buffer[9..13]);
         let bits = match buffer[13] {
             0 | 2 | 42 => BitSize::Two,
             4 => BitSize::Four,
@@ -246,10 +248,10 @@ impl FileHeader {
     /// Returns an error if writing to the writer fails (typically an I/O error).
     pub fn write_bytes<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut buffer = [0u8; SIZE_HEADER];
-        LittleEndian::write_u32(&mut buffer[0..4], self.magic);
+        buffer[0..4].copy_from_slice(&self.magic.to_le_bytes());
         buffer[4] = self.format;
-        LittleEndian::write_u32(&mut buffer[5..9], self.slen);
-        LittleEndian::write_u32(&mut buffer[9..13], self.xlen);
+        buffer[5..9].copy_from_slice(&self.slen.to_le_bytes());
+        buffer[9..13].copy_from_slice(&self.xlen.to_le_bytes());
         buffer[13] = self.bits.into();
         buffer[14] = self.flags.into();
         buffer[15..32].copy_from_slice(&self.reserved);
@@ -327,7 +329,11 @@ mod tests {
 
     #[test]
     fn test_from_bytes_four_bit_size() {
-        let header = FileHeaderBuilder::new().bitsize(BitSize::Four).slen(32).build().unwrap();
+        let header = FileHeaderBuilder::new()
+            .bitsize(BitSize::Four)
+            .slen(32)
+            .build()
+            .unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -376,7 +382,12 @@ mod tests {
 
     #[test]
     fn test_from_reader_valid() {
-        let header = FileHeaderBuilder::new().slen(32).xlen(16).flags(true).build().unwrap();
+        let header = FileHeaderBuilder::new()
+            .slen(32)
+            .xlen(16)
+            .flags(true)
+            .build()
+            .unwrap();
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
         let mut cursor = std::io::Cursor::new(buffer);
