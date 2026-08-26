@@ -119,15 +119,16 @@ impl FileHeaderBuilder {
     }
     #[must_use]
     pub fn build(self) -> FileHeader {
-        FileHeader::with_capacity(
-            self.block.unwrap_or(BLOCK_SIZE),
-            self.qual.unwrap_or(false),
-            self.compressed.unwrap_or(false),
-            self.paired.unwrap_or(false),
-            self.bitsize.unwrap_or_default(),
-            self.headers.unwrap_or(false),
-            self.flags.unwrap_or(false),
-        )
+        FileHeader {
+            block: self.block.unwrap_or(BLOCK_SIZE),
+            qual: self.qual.unwrap_or(false),
+            compressed: self.compressed.unwrap_or(false),
+            paired: self.paired.unwrap_or(false),
+            bits: self.bitsize.unwrap_or_default(),
+            headers: self.headers.unwrap_or(false),
+            flags: self.flags.unwrap_or(false),
+            ..FileHeader::default()
+        }
     }
 }
 
@@ -214,103 +215,21 @@ impl Default for FileHeader {
     /// - Does not include sequence headers
     /// - Uses 2-bit nucleotide encoding
     fn default() -> Self {
-        Self::with_capacity(
-            BLOCK_SIZE,
-            false,
-            false,
-            false,
-            BitSize::default(),
-            false,
-            false,
-        )
-    }
-}
-impl FileHeader {
-    /// Creates a new VBQ header with the default block size
-    ///
-    /// # Parameters
-    ///
-    /// * `qual` - Whether to include quality scores with sequences
-    /// * `compressed` - Whether to use ZSTD compression for blocks
-    /// * `paired` - Whether records contain paired sequences
-    /// * `bitsize` - Number of bits per nucleotide (2 or 4)
-    /// * `headers` - Whether to include sequence headers with records
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use binseq::vbq::FileHeaderBuilder;
-    ///
-    /// // Create header with quality scores and compression, without paired sequences
-    /// let header = FileHeaderBuilder::new()
-    ///     .qual(true)
-    ///     .compressed(true)
-    ///     .build();
-    /// ```
-    #[must_use]
-    pub fn new(
-        qual: bool,
-        compressed: bool,
-        paired: bool,
-        bitsize: BitSize,
-        headers: bool,
-        flags: bool,
-    ) -> Self {
-        Self::with_capacity(
-            BLOCK_SIZE, qual, compressed, paired, bitsize, headers, flags,
-        )
-    }
-
-    /// Creates a new VBQ header with a custom block size
-    ///
-    /// # Parameters
-    ///
-    /// * `block` - Custom block size in bytes (virtual/uncompressed size)
-    /// * `qual` - Whether to include quality scores with sequences
-    /// * `compressed` - Whether to use ZSTD compression for blocks
-    /// * `paired` - Whether records contain paired sequences
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use binseq::vbq::FileHeaderBuilder;
-    ///
-    /// // Create header with a 256KB block size, with quality scores and compression
-    /// let header = FileHeaderBuilder::new()
-    ///     .block(256 * 1024)
-    ///     .qual(true)
-    ///     .compressed(true)
-    ///     .build();
-    /// ```
-    #[must_use]
-    pub fn with_capacity(
-        block: u64,
-        qual: bool,
-        compressed: bool,
-        paired: bool,
-        bitsize: BitSize,
-        headers: bool,
-        flags: bool,
-    ) -> Self {
         Self {
             magic: MAGIC,
             format: FORMAT,
-            block,
-            qual,
-            compressed,
-            paired,
-            headers,
-            flags,
-            bits: bitsize,
+            block: BLOCK_SIZE,
+            qual: false,
+            compressed: false,
+            paired: false,
+            headers: false,
+            flags: false,
+            bits: BitSize::default(),
             reserved: RESERVED_BYTES,
         }
     }
-
-    /// Sets the encoding bitsize for the header.
-    pub fn set_bitsize(&mut self, bits: BitSize) {
-        self.bits = bits;
-    }
-
+}
+impl FileHeader {
     /// Creates a header from a 32-byte buffer
     ///
     /// This function parses a raw byte buffer into a `FileHeader` structure,
@@ -593,37 +512,22 @@ mod tests {
     // ==================== FileHeader Constructor Tests ====================
 
     #[test]
-    fn test_file_header_new() {
-        let header = FileHeader::new(true, true, true, BitSize::Four, true, true);
-        assert_eq!(header.block, BLOCK_SIZE);
-        assert!(header.qual);
-        assert!(header.compressed);
-        assert!(header.paired);
-        assert_eq!(header.bits, BitSize::Four);
-        assert!(header.headers);
-        assert!(header.flags);
-        assert!(header.is_paired());
-    }
-
-    #[test]
     fn test_file_header_default() {
         let header = FileHeader::default();
         assert_eq!(header.block, BLOCK_SIZE);
         assert!(!header.is_paired());
     }
 
-    #[test]
-    fn test_set_bitsize() {
-        let mut header = FileHeader::default();
-        header.set_bitsize(BitSize::Four);
-        assert_eq!(header.bits, BitSize::Four);
-    }
-
     // ==================== FileHeader from_bytes/from_reader Tests ====================
 
     #[test]
     fn test_file_header_roundtrip() {
-        let header = FileHeader::new(true, false, true, BitSize::Two, true, true);
+        let header = FileHeaderBuilder::new()
+            .qual(true)
+            .paired(true)
+            .headers(true)
+            .flags(true)
+            .build();
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
         let mut cursor = std::io::Cursor::new(buffer);
@@ -633,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_file_header_from_bytes_four_bit() {
-        let header = FileHeader::new(false, false, false, BitSize::Four, false, false);
+        let header = FileHeaderBuilder::new().bitsize(BitSize::Four).build();
         let mut buffer = [0u8; SIZE_HEADER];
         {
             let mut cursor = std::io::Cursor::new(&mut buffer[..]);

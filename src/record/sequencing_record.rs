@@ -20,13 +20,13 @@ use crate::{BitSize, Result, error::WriteError};
 /// ```
 #[derive(Clone, Copy, Default)]
 pub struct SequencingRecord<'a> {
-    pub(crate) s_seq: &'a [u8],
-    pub(crate) s_qual: Option<&'a [u8]>,
-    pub(crate) s_header: Option<&'a [u8]>,
-    pub(crate) x_seq: Option<&'a [u8]>,
-    pub(crate) x_qual: Option<&'a [u8]>,
-    pub(crate) x_header: Option<&'a [u8]>,
-    pub(crate) flag: Option<u64>,
+    pub s_seq: &'a [u8],
+    pub s_qual: Option<&'a [u8]>,
+    pub s_header: Option<&'a [u8]>,
+    pub x_seq: Option<&'a [u8]>,
+    pub x_qual: Option<&'a [u8]>,
+    pub x_header: Option<&'a [u8]>,
+    pub flag: Option<u64>,
 }
 
 impl<'a> SequencingRecord<'a> {
@@ -50,55 +50,6 @@ impl<'a> SequencingRecord<'a> {
             x_header,
             flag,
         }
-    }
-
-    /// Returns the primary sequence
-    #[inline]
-    #[must_use]
-    pub fn s_seq(&self) -> &'a [u8] {
-        self.s_seq
-    }
-
-    /// Returns the primary quality scores if present
-    #[inline]
-    #[must_use]
-    pub fn s_qual(&self) -> Option<&'a [u8]> {
-        self.s_qual
-    }
-
-    /// Returns the primary header if present
-    #[inline]
-    #[must_use]
-    pub fn s_header(&self) -> Option<&'a [u8]> {
-        self.s_header
-    }
-
-    /// Returns the extended/paired sequence if present
-    #[inline]
-    #[must_use]
-    pub fn x_seq(&self) -> Option<&'a [u8]> {
-        self.x_seq
-    }
-
-    /// Returns the extended quality scores if present
-    #[inline]
-    #[must_use]
-    pub fn x_qual(&self) -> Option<&'a [u8]> {
-        self.x_qual
-    }
-
-    /// Returns the extended header if present
-    #[inline]
-    #[must_use]
-    pub fn x_header(&self) -> Option<&'a [u8]> {
-        self.x_header
-    }
-
-    /// Returns the flag if present
-    #[inline]
-    #[must_use]
-    pub fn flag(&self) -> Option<u64> {
-        self.flag
     }
 
     /// Returns the configured size of this record for CBQ format.
@@ -318,24 +269,10 @@ impl<'a> SequencingRecordBuilder<'a> {
         self
     }
 
-    /// Sets the primary header from an Option
-    #[must_use]
-    pub fn opt_s_header(mut self, s_header: Option<&'a [u8]>) -> Self {
-        self.s_header = s_header;
-        self
-    }
-
     /// Sets the extended/paired sequence
     #[must_use]
     pub fn x_seq(mut self, x_seq: &'a [u8]) -> Self {
         self.x_seq = Some(x_seq);
-        self
-    }
-
-    /// Sets the extended/paired sequence from an Option
-    #[must_use]
-    pub fn opt_x_seq(mut self, x_seq: Option<&'a [u8]>) -> Self {
-        self.x_seq = x_seq;
         self
     }
 
@@ -360,24 +297,10 @@ impl<'a> SequencingRecordBuilder<'a> {
         self
     }
 
-    /// Sets the extended header from an Option
-    #[must_use]
-    pub fn opt_x_header(mut self, x_header: Option<&'a [u8]>) -> Self {
-        self.x_header = x_header;
-        self
-    }
-
     /// Sets the flag value
     #[must_use]
     pub fn flag(mut self, flag: u64) -> Self {
         self.flag = Some(flag);
-        self
-    }
-
-    /// Sets the flag value from an Option
-    #[must_use]
-    pub fn opt_flag(mut self, flag: Option<u64>) -> Self {
-        self.flag = flag;
         self
     }
 
@@ -419,25 +342,25 @@ mod tests {
             Some(b"x_hdr"),
             Some(7),
         );
-        assert_eq!(record.s_seq(), b"ACGT");
-        assert_eq!(record.s_qual(), Some(b"IIII".as_slice()));
-        assert_eq!(record.s_header(), Some(b"s_hdr".as_slice()));
-        assert_eq!(record.x_seq(), Some(b"TGCA".as_slice()));
-        assert_eq!(record.x_qual(), Some(b"FFFF".as_slice()));
-        assert_eq!(record.x_header(), Some(b"x_hdr".as_slice()));
-        assert_eq!(record.flag(), Some(7));
+        assert_eq!(record.s_seq, b"ACGT");
+        assert_eq!(record.s_qual, Some(b"IIII".as_slice()));
+        assert_eq!(record.s_header, Some(b"s_hdr".as_slice()));
+        assert_eq!(record.x_seq, Some(b"TGCA".as_slice()));
+        assert_eq!(record.x_qual, Some(b"FFFF".as_slice()));
+        assert_eq!(record.x_header, Some(b"x_hdr".as_slice()));
+        assert_eq!(record.flag, Some(7));
     }
 
     #[test]
     fn test_new_constructor_minimal() {
         let record = SequencingRecord::new(b"ACGT", None, None, None, None, None, None);
-        assert_eq!(record.s_seq(), b"ACGT");
-        assert_eq!(record.s_qual(), None);
-        assert_eq!(record.s_header(), None);
-        assert_eq!(record.x_seq(), None);
-        assert_eq!(record.x_qual(), None);
-        assert_eq!(record.x_header(), None);
-        assert_eq!(record.flag(), None);
+        assert_eq!(record.s_seq, b"ACGT");
+        assert_eq!(record.s_qual, None);
+        assert_eq!(record.s_header, None);
+        assert_eq!(record.x_seq, None);
+        assert_eq!(record.x_qual, None);
+        assert_eq!(record.x_header, None);
+        assert_eq!(record.flag, None);
         assert!(!record.is_paired());
         assert!(!record.has_flags());
         assert!(!record.has_headers());
@@ -447,35 +370,15 @@ mod tests {
     // ==================== SequencingRecordBuilder opt_* setters ====================
 
     #[test]
-    fn test_builder_opt_setters_some() {
+    fn test_builder_opt_setters() {
         let record = SequencingRecordBuilder::default()
             .s_seq(b"ACGT")
-            .opt_s_header(Some(b"s_hdr"))
-            .opt_x_seq(Some(b"TGCA"))
-            .opt_x_qual(Some(b"FFFF"))
-            .opt_flag(Some(9))
-            .build()
-            .unwrap();
-        assert_eq!(record.s_header(), Some(b"s_hdr".as_slice()));
-        assert_eq!(record.x_seq(), Some(b"TGCA".as_slice()));
-        assert_eq!(record.x_qual(), Some(b"FFFF".as_slice()));
-        assert_eq!(record.flag(), Some(9));
-    }
-
-    #[test]
-    fn test_builder_opt_setters_none() {
-        let record = SequencingRecordBuilder::default()
-            .s_seq(b"ACGT")
-            .opt_s_header(None)
-            .opt_x_seq(None)
+            .opt_s_qual(Some(b"FFFF"))
             .opt_x_qual(None)
-            .opt_flag(None)
             .build()
             .unwrap();
-        assert_eq!(record.s_header(), None);
-        assert_eq!(record.x_seq(), None);
-        assert_eq!(record.x_qual(), None);
-        assert_eq!(record.flag(), None);
+        assert_eq!(record.s_qual, Some(b"FFFF".as_slice()));
+        assert_eq!(record.x_qual, None);
     }
 
     #[test]

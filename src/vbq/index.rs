@@ -32,19 +32,11 @@
 //! - Cumulative record counts changed from `u32` to `u64`
 //! - Support for files with more than 4 billion records
 
-use std::{
-    fs::File,
-    io::{Cursor, Read, Write},
-    path::Path,
-};
+use std::io::{Cursor, Read, Write};
 
 use byteorder::{ByteOrder, LittleEndian};
 use zstd::{Decoder, Encoder};
 
-use super::{
-    BlockHeader, FileHeader,
-    header::{SIZE_BLOCK_HEADER, SIZE_HEADER},
-};
 use crate::error::{IndexError, Result};
 
 /// Size of `BlockRange` in bytes
@@ -374,22 +366,18 @@ impl IndexHeader {
 /// the file.
 ///
 /// The index is embedded at the end of VBQ files and can be loaded using
-/// `MmapReader::load_index()` or created by scanning a VBQ file using
-/// `BlockIndex::from_vbq()`. Once loaded, it provides information about block
+/// `MmapReader::load_index()`. Once loaded, it provides information about block
 /// locations, sizes, and record counts.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// use binseq::vbq::{BlockIndex, MmapReader};
+/// use binseq::vbq::MmapReader;
 /// use std::path::Path;
 ///
-/// // Create an index from a VBQ file
-/// let vbq_path = Path::new("example.vbq");
-/// let index = BlockIndex::from_vbq(vbq_path).unwrap();
-///
-/// // Use the index with a reader for parallel processing
-/// let reader = MmapReader::new(vbq_path).unwrap();
+/// // Load the embedded index from a VBQ file
+/// let reader = MmapReader::new(Path::new("example.vbq")).unwrap();
+/// let index = reader.load_index().unwrap();
 /// println!("File contains {} blocks", index.n_blocks());
 /// ```
 #[derive(Debug, Clone)]
@@ -480,85 +468,6 @@ impl BlockIndex {
         self.ranges.push(range);
     }
 
-    /// Creates a new index by scanning a VBQ file
-    ///
-    /// This method memory-maps the specified VBQ file and scans it block by block
-    /// to create an index. This is primarily used internally when embedding the index
-    /// into VBQ files during the write process.
-    ///
-    /// # Parameters
-    ///
-    /// * `path` - Path to the VBQ file to index
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Self)` - A new `BlockIndex` containing information about all blocks in the file
-    /// * `Err(_)` - If an error occurred during file opening, validation, or scanning
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use binseq::vbq::BlockIndex;
-    /// use std::path::Path;
-    ///
-    /// // Create an index from a VBQ file
-    /// let index = BlockIndex::from_vbq(Path::new("example.vbq")).unwrap();
-    ///
-    /// // Get statistics about the file
-    /// println!("File contains {} blocks", index.n_blocks());
-    ///
-    /// // Analyze the record distribution
-    /// if let Some(last_range) = index.ranges().last() {
-    ///     println!("Total records: {}", last_range.cumulative_records);
-    ///     println!("Average records per block: {}",
-    ///              last_range.cumulative_records as f64 / index.n_blocks() as f64);
-    /// }
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// This method uses memory mapping for efficiency, which allows the operating system
-    /// to load only the needed portions of the file into memory as they are accessed.
-    pub fn from_vbq<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-        let file_size = mmap.len();
-
-        // Read header from mapped memory (unused but checks for validity)
-        let _header = {
-            let mut header_bytes = [0u8; SIZE_HEADER];
-            header_bytes.copy_from_slice(&mmap[..SIZE_HEADER]);
-            FileHeader::from_bytes(&header_bytes)?
-        };
-
-        // Initialize position after the header
-        let mut pos = SIZE_HEADER;
-
-        // Initialize the collection
-        let index_header = IndexHeader::new(file_size as u64);
-        let mut index = BlockIndex::new(index_header);
-
-        // Find all block headers
-        let mut record_total = 0;
-        while pos < mmap.len() {
-            let block_header = {
-                let mut header_bytes = [0u8; SIZE_BLOCK_HEADER];
-                header_bytes.copy_from_slice(&mmap[pos..pos + SIZE_BLOCK_HEADER]);
-                BlockHeader::from_bytes(&header_bytes)?
-            };
-            index.add_range(BlockRange::new(
-                pos as u64,
-                block_header.size,
-                block_header.records,
-                record_total,
-            ));
-            pos += SIZE_BLOCK_HEADER + block_header.size as usize;
-            record_total += u64::from(block_header.records);
-        }
-
-        Ok(index)
-    }
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let index_header = IndexHeader::from_bytes(bytes)?;
         let buffer = {
@@ -633,69 +542,6 @@ impl BlockIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Writes a minimal raw VBQ file (file header + block headers/data, with
-    /// **no** embedded index) to `path`, suitable for `BlockIndex::from_vbq`.
-    ///
-    /// `from_vbq` scans block-by-block from just after the file header to
-    /// EOF, so it requires the file to end exactly at the last block's data
-    /// -- unlike files produced by `vbq::Writer`, which always append an
-    /// embedded index on `finish()` that `from_vbq` cannot parse as a block.
-    fn write_raw_vbq_file(path: &str, blocks: &[(u64, u32)]) {
-        let mut buffer = Vec::new();
-        FileHeader::default().write_bytes(&mut buffer).unwrap();
-        for &(size, records) in blocks {
-            BlockHeader::new(size, records)
-                .write_bytes(&mut buffer)
-                .unwrap();
-            buffer.extend(std::iter::repeat_n(0u8, size as usize));
-        }
-        std::fs::write(path, buffer).unwrap();
-    }
-
-    // ==================== BlockIndex::from_vbq Tests ====================
-
-    #[test]
-    fn test_from_vbq() {
-        let path = "test_index_from_vbq.vbq";
-        write_raw_vbq_file(path, &[(64, 3), (128, 5)]);
-
-        let index = BlockIndex::from_vbq(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-
-        assert_eq!(index.n_blocks(), 2);
-        assert_eq!(index.num_records(), 8);
-        assert_eq!(index.ranges()[0].cumulative_records, 0);
-        assert_eq!(index.ranges()[1].cumulative_records, 3);
-    }
-
-    #[test]
-    fn test_from_vbq_nonexistent_file() {
-        let result = BlockIndex::from_vbq("./data/does_not_exist.vbq");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_n_blocks() {
-        let path = "test_index_n_blocks.vbq";
-        write_raw_vbq_file(path, &[(32, 1)]);
-
-        let index = BlockIndex::from_vbq(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-
-        assert_eq!(index.n_blocks(), index.ranges().len());
-    }
-
-    #[test]
-    fn test_pprint() {
-        let path = "test_index_pprint.vbq";
-        write_raw_vbq_file(path, &[(32, 1)]);
-
-        // Just verify it doesn't panic
-        let index = BlockIndex::from_vbq(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-        index.pprint();
-    }
 
     #[test]
     fn test_num_records_empty_index() {

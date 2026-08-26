@@ -88,32 +88,15 @@ impl BinseqReader {
 
     /// Process records in parallel within a specified range
     ///
-    /// This method allows parallel processing of a subset of records within the file,
-    /// defined by a start and end index. The range is distributed across the specified
-    /// number of threads.
-    ///
-    /// # Arguments
-    ///
-    /// * `processor` - The processor to use for each record
-    /// * `num_threads` - The number of threads to spawn
-    /// * `start` - The starting record index (inclusive)
-    /// * `end` - The ending record index (exclusive)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If all records were processed successfully
-    /// * `Err(Error)` - If an error occurred during processing
+    /// Inherent convenience for [`ParallelReader::process_parallel_range`], callable
+    /// without importing the trait.
     pub fn process_parallel_range<P: ParallelProcessor + Clone + 'static>(
         self,
         processor: P,
         num_threads: usize,
         range: Range<usize>,
     ) -> Result<()> {
-        match self {
-            Self::Bq(reader) => reader.process_parallel_range(processor, num_threads, range),
-            Self::Vbq(reader) => reader.process_parallel_range(processor, num_threads, range),
-            Self::Cbq(reader) => reader.process_parallel_range(processor, num_threads, range),
-        }
+        <Self as ParallelReader>::process_parallel_range(self, processor, num_threads, range)
     }
 }
 impl ParallelReader for BinseqReader {
@@ -224,14 +207,12 @@ pub trait ParallelProcessor: Send + Clone {
 
     /// Called when a thread finishes processing its batch
     /// Default implementation does nothing
-    #[allow(unused_variables)]
     fn on_batch_complete(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Called when a thread finished processing all its batches
     /// Default implementation does nothing
-    #[allow(unused_variables)]
     fn on_thread_complete(&mut self) -> Result<()> {
         Ok(())
     }
@@ -239,7 +220,6 @@ pub trait ParallelProcessor: Send + Clone {
     /// Set the thread ID for this processor
     ///
     /// Each thread should call this method with its own unique ID.
-    #[allow(unused_variables)]
     fn set_tid(&mut self, _tid: usize) {
         // Default implementation does nothing
     }

@@ -220,7 +220,7 @@ impl ColumnarBlock {
     /// Note: this does not check if quality scores are different lengths from sequence
     fn add_quality(&mut self, record: &SequencingRecord) -> Result<()> {
         if self.header.has_qualities() {
-            let Some(squal) = record.s_qual() else {
+            let Some(squal) = record.s_qual else {
                 return Err(WriteError::ConfigurationMismatch {
                     attribute: "s_qual",
                     expected: true,
@@ -231,7 +231,7 @@ impl ColumnarBlock {
             self.qual.extend_from_slice(squal);
 
             if self.header.is_paired() {
-                let Some(xqual) = record.x_qual() else {
+                let Some(xqual) = record.x_qual else {
                     return Err(WriteError::ConfigurationMismatch {
                         attribute: "x_qual",
                         expected: true,

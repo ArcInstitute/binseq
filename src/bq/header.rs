@@ -141,67 +141,6 @@ pub struct FileHeader {
     pub reserved: [u8; 17],
 }
 impl FileHeader {
-    /// Creates a new header with the specified sequence length
-    ///
-    /// This constructor initializes a standard header with the given sequence length,
-    /// setting the magic number and format version to their default values.
-    /// The extended sequence length (xlen) is set to 0.
-    ///
-    /// # Arguments
-    ///
-    /// * `bits` - The number of bits per nucleotide (currently 2 or 4)
-    /// * `slen` - The length of sequences in the file
-    /// * `flags` - The flags for the header
-    ///
-    /// # Returns
-    ///
-    /// A new `FileHeader` instance
-    #[must_use]
-    pub fn new(bits: BitSize, slen: u32, flags: bool) -> Self {
-        Self {
-            magic: MAGIC,
-            format: FORMAT,
-            slen,
-            xlen: 0,
-            bits,
-            flags,
-            reserved: RESERVED,
-        }
-    }
-
-    /// Creates a new header with both primary and extended sequence lengths
-    ///
-    /// This constructor initializes a header for files that contain both primary
-    /// and secondary sequence data, such as quality scores or annotations.
-    ///
-    /// # Arguments
-    ///
-    /// * `bits` - The number of bits per nucleotide (currently 2 or 4)
-    /// * `slen` - The length of primary sequences in the file
-    /// * `xlen` - The length of secondary/extended sequences in the file
-    /// * `flags` - The flags for the header
-    ///
-    /// # Returns
-    ///
-    /// A new `FileHeader` instance with extended sequence information
-    #[must_use]
-    pub fn new_extended(bits: BitSize, slen: u32, xlen: u32, flags: bool) -> Self {
-        Self {
-            magic: MAGIC,
-            format: FORMAT,
-            slen,
-            xlen,
-            bits,
-            flags,
-            reserved: RESERVED,
-        }
-    }
-
-    /// Sets the bitsize of the header
-    pub fn set_bitsize(&mut self, bits: BitSize) {
-        self.bits = bits;
-    }
-
     /// Checks if the file is paired
     #[must_use]
     pub fn is_paired(&self) -> bool {
@@ -373,38 +312,11 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ==================== FileHeader Constructor Tests ====================
-
-    #[test]
-    fn test_header_new() {
-        let header = FileHeader::new(BitSize::Two, 100, true);
-        assert_eq!(header.slen, 100);
-        assert_eq!(header.xlen, 0);
-        assert!(header.flags);
-        assert!(!header.is_paired());
-    }
-
-    #[test]
-    fn test_header_new_extended() {
-        let header = FileHeader::new_extended(BitSize::Four, 100, 50, false);
-        assert_eq!(header.slen, 100);
-        assert_eq!(header.xlen, 50);
-        assert_eq!(header.bits, BitSize::Four);
-        assert!(header.is_paired());
-    }
-
-    #[test]
-    fn test_set_bitsize() {
-        let mut header = FileHeader::new(BitSize::Two, 100, false);
-        header.set_bitsize(BitSize::Four);
-        assert_eq!(header.bits, BitSize::Four);
-    }
-
     // ==================== from_bytes Tests ====================
 
     #[test]
     fn test_from_bytes_invalid_format_version() {
-        let header = FileHeader::new(BitSize::Two, 32, false);
+        let header = FileHeaderBuilder::new().slen(32).build().unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -415,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_from_bytes_four_bit_size() {
-        let header = FileHeader::new(BitSize::Four, 32, false);
+        let header = FileHeaderBuilder::new().bitsize(BitSize::Four).slen(32).build().unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -425,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_from_bytes_invalid_bitsize() {
-        let header = FileHeader::new(BitSize::Two, 32, false);
+        let header = FileHeaderBuilder::new().slen(32).build().unwrap();
         let mut buffer = [0u8; SIZE_HEADER];
         let mut cursor = std::io::Cursor::new(&mut buffer[..]);
         header.write_bytes(&mut cursor).unwrap();
@@ -452,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_from_buffer_valid() {
-        let header = FileHeader::new(BitSize::Two, 32, false);
+        let header = FileHeaderBuilder::new().slen(32).build().unwrap();
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
         buffer.extend_from_slice(&[0u8; 16]); // trailing data beyond header
@@ -464,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_from_reader_valid() {
-        let header = FileHeader::new_extended(BitSize::Two, 32, 16, true);
+        let header = FileHeaderBuilder::new().slen(32).xlen(16).flags(true).build().unwrap();
         let mut buffer = Vec::new();
         header.write_bytes(&mut buffer).unwrap();
         let mut cursor = std::io::Cursor::new(buffer);

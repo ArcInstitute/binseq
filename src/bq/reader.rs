@@ -72,18 +72,6 @@ impl<'a> RefRecord<'a> {
             header_len: 0,
         }
     }
-    /// Returns the record's configuration
-    ///
-    /// The configuration defines the layout and size of the record's components.
-    #[must_use]
-    pub fn config(&self) -> RecordConfig {
-        self.config
-    }
-
-    pub fn set_id(&mut self, id: &[u8]) {
-        self.header_len = id.len();
-        self.header_buf[..self.header_len].copy_from_slice(id);
-    }
 }
 
 impl BinseqRecord for RefRecord<'_> {
@@ -310,13 +298,6 @@ impl RecordConfig {
             header.bits,
             header.flags,
         )
-    }
-
-    /// Returns whether this record contains extended sequence data
-    ///
-    /// A record is considered paired if it has a non-zero extended sequence length.
-    pub fn paired(&self) -> bool {
-        self.xlen > 0
     }
 
     /// Returns the primary sequence length in base pairs
