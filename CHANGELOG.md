@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bq::FileHeader::{new, new_extended, set_bitsize}` and `vbq::FileHeader::{new, with_capacity, set_bitsize}`;
   - use the `FileHeaderBuilder`s.
 - **`SequencingRecord` getters**
-  - the fields are now public; the unused `opt_s_header`, `opt_x_seq`, `opt_x_header`, and `opt_flag` builder setters are gone (`opt_s_qual` / `opt_x_qual` remain).
+  - the fields are now public; the unused `opt_s_header`, `opt_x_seq`, and `opt_x_header` builder setters are gone (`opt_s_qual` / `opt_x_qual` / `opt_flag` remain).
 - **Never-constructed error variants**
   - the five `WriteError` flag-mismatch variants and `CbqError::MissingSequenceOnSequencingRecord`;
   - `BuilderError` folds into `HeaderError::MissingSequenceLength` and `FastxEncodingError` into `WriteError`.

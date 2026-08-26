@@ -304,6 +304,13 @@ impl<'a> SequencingRecordBuilder<'a> {
         self
     }
 
+    /// Sets the flag value from an Option
+    #[must_use]
+    pub fn opt_flag(mut self, flag: Option<u64>) -> Self {
+        self.flag = flag;
+        self
+    }
+
     /// Builds the `SequencingRecord`
     ///
     /// # Errors
@@ -375,10 +382,12 @@ mod tests {
             .s_seq(b"ACGT")
             .opt_s_qual(Some(b"FFFF"))
             .opt_x_qual(None)
+            .opt_flag(Some(42))
             .build()
             .unwrap();
         assert_eq!(record.s_qual, Some(b"FFFF".as_slice()));
         assert_eq!(record.x_qual, None);
+        assert_eq!(record.flag, Some(42));
     }
 
     #[test]
