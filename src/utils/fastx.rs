@@ -36,6 +36,10 @@ enum FastxInput {
 /// Created by [`BinseqWriterBuilder::encode_fastx`]; configures the input source
 /// and threading before running the encoding.
 ///
+/// Can be ordered or unordered;
+/// though unordered takes better advantage of parallelism, ordering preserves
+/// the input order in the fastx.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -67,8 +71,8 @@ impl FastxEncoderBuilder {
             builder,
             output,
             input: None,
-            threads: 0, // 0 means use all available cores
-            ordered: true,
+            threads: 0,     // 0 means use all available cores
+            ordered: false, // default to unordered for speed
         }
     }
 
@@ -221,6 +225,16 @@ impl Encoder {
         self.writer.lock().finish()?;
         Ok(())
     }
+    fn flush_batch(&mut self) -> paraseq::Result<()> {
+        let mut writer = self.writer.lock();
+        if self.ordered {
+            // can't take full advantage of parallelism if we have to order the output
+            writer.ingest(&mut self.thread_writer)
+        } else {
+            writer.ingest_completed(&mut self.thread_writer)
+        }
+        .map_err(IntoProcessError::into_process_error)
+    }
 }
 
 impl<Rf: Record> ParallelProcessor<Rf> for Encoder {
@@ -239,12 +253,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for Encoder {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Only drain completed blocks mid-stream (keeps CBQ blocks full)
-        self.writer
-            .lock()
-            .ingest_completed(&mut self.thread_writer)
-            .map_err(IntoProcessError::into_process_error)?;
-        Ok(())
+        self.flush_batch()
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
@@ -281,12 +290,7 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for Encoder {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Only drain completed blocks mid-stream (keeps CBQ blocks full)
-        self.writer
-            .lock()
-            .ingest_completed(&mut self.thread_writer)
-            .map_err(IntoProcessError::into_process_error)?;
-        Ok(())
+        self.flush_batch()
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
@@ -319,6 +323,16 @@ mod tests {
 
         assert!(encoder_builder.input.is_none());
         assert_eq!(encoder_builder.threads, 0);
+        assert!(!encoder_builder.ordered);
+    }
+
+    #[test]
+    fn test_encoder_builder_ordered_setter() {
+        let builder = BinseqWriterBuilder::new(Format::Cbq);
+        let handle = Box::new(Cursor::new(Vec::new()));
+        let encoder_builder = FastxEncoderBuilder::new(builder, handle).ordered(false);
+
+        assert!(!encoder_builder.ordered);
     }
 
     #[test]
@@ -370,5 +384,68 @@ mod tests {
 
         // Run the encoder builder and assert that it is successful
         assert!(encoder_builder.run().is_ok());
+    }
+
+    #[derive(Clone, Default)]
+    struct HeaderCollector {
+        headers: Arc<parking_lot::Mutex<Vec<(u64, String)>>>,
+    }
+    impl crate::ParallelProcessor for HeaderCollector {
+        fn process_record<R: crate::BinseqRecord>(&mut self, record: R) -> crate::Result<()> {
+            let header = String::from_utf8_lossy(record.sheader()).into_owned();
+            self.headers.lock().push((record.index(), header));
+            Ok(())
+        }
+    }
+
+    /// Encodes a synthetic multi-threaded FASTQ input with `ordered(true)` and confirms
+    /// the written BINSEQ records come back out in the same order as the input, even
+    /// though multiple threads raced to produce them.
+    #[test]
+    fn test_encoder_builder_ordered_preserves_record_order() {
+        use crate::{BinseqReader, ParallelReader as DecodeReader};
+        use std::fmt::Write as _;
+        use std::sync::Arc;
+
+        const N_RECORDS: usize = 4_000;
+        const SEQ_LEN: usize = 32;
+
+        let mut fastq = String::new();
+        for i in 0..N_RECORDS {
+            let base = b"ACGT"[i % 4] as char;
+            let seq: String = std::iter::repeat_n(base, SEQ_LEN).collect();
+            let qual: String = std::iter::repeat_n('F', SEQ_LEN).collect();
+            let _ = writeln!(fastq, "@read_{i:06}\n{seq}\n+\n{qual}");
+        }
+
+        let pid = std::process::id();
+        let input_path = std::env::temp_dir().join(format!("binseq_ordered_input_{pid}.fastq"));
+        let output_path = std::env::temp_dir().join(format!("binseq_ordered_output_{pid}.cbq"));
+        std::fs::write(&input_path, &fastq).unwrap();
+
+        let builder = BinseqWriterBuilder::new(Format::Cbq).headers(true);
+        let handle = Box::new(std::fs::File::create(&output_path).unwrap());
+        let result = FastxEncoderBuilder::new(builder, handle)
+            .input(&input_path)
+            .threads(4)
+            .ordered(true)
+            .run();
+        std::fs::remove_file(&input_path).unwrap();
+        assert!(result.is_ok());
+
+        let reader = BinseqReader::new(&output_path).unwrap();
+        let processor = HeaderCollector::default();
+        let headers = processor.headers.clone();
+        reader.process_parallel(processor, 4).unwrap();
+        std::fs::remove_file(&output_path).unwrap();
+
+        let mut results = Arc::try_unwrap(headers).unwrap().into_inner();
+        results.sort_by_key(|(idx, _)| *idx);
+
+        assert_eq!(results.len(), N_RECORDS);
+        for (i, (idx, header)) in results.iter().enumerate() {
+            assert_eq!(*idx, i as u64);
+            assert_eq!(header, &format!("read_{i:06}"));
+        }
     }
 }
