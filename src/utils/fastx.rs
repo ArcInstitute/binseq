@@ -56,6 +56,7 @@ pub struct FastxEncoderBuilder {
     builder: BinseqWriterBuilder,
     output: BoxedWrite,
     input: Option<FastxInput>,
+    ordered: bool,
     threads: usize,
 }
 
@@ -67,6 +68,7 @@ impl FastxEncoderBuilder {
             output,
             input: None,
             threads: 0, // 0 means use all available cores
+            ordered: true,
         }
     }
 
@@ -100,6 +102,13 @@ impl FastxEncoderBuilder {
     #[must_use]
     pub fn threads(mut self, n: usize) -> Self {
         self.threads = n;
+        self
+    }
+
+    /// Set whether the output should be ordered as input (small perf cost, switch off for speed)
+    #[must_use]
+    pub fn ordered(mut self, ordered: bool) -> Self {
+        self.ordered = ordered;
         self
     }
 
@@ -143,7 +152,7 @@ impl FastxEncoderBuilder {
 
         let writer = self.builder.build(self.output)?;
         let paired = writer.is_paired();
-        let mut encoder = Encoder::new(writer)?;
+        let mut encoder = Encoder::new(writer, self.ordered)?;
         match (paired, r2) {
             (true, Some(r2)) => r1.process_parallel_paired(r2, &mut encoder, self.threads),
             (true, None) => r1.process_parallel_interleaved(&mut encoder, self.threads),
@@ -193,15 +202,18 @@ struct Encoder {
     writer: Arc<Mutex<BinseqWriter<Box<dyn Write + Send>>>>,
     /// Thread-local writer buffer
     thread_writer: BinseqWriter<Vec<u8>>,
+    /// Whether the output should follow same order as input
+    ordered: bool,
 }
 
 impl Encoder {
     /// Create a new encoder with a global writer
-    pub fn new(writer: BinseqWriter<Box<dyn Write + Send>>) -> Result<Self> {
+    pub fn new(writer: BinseqWriter<Box<dyn Write + Send>>, ordered: bool) -> Result<Self> {
         let thread_writer = writer.new_headless_buffer()?;
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
             thread_writer,
+            ordered,
         })
     }
     /// Finish the stream on the global writer
@@ -242,6 +254,10 @@ impl<Rf: Record> ParallelProcessor<Rf> for Encoder {
             .map_err(IntoProcessError::into_process_error)?;
         Ok(())
     }
+
+    fn requires_ordering(&self) -> bool {
+        self.ordered
+    }
 }
 
 impl<Rf: Record> PairedParallelProcessor<Rf> for Encoder {
@@ -280,6 +296,10 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for Encoder {
             .map_err(IntoProcessError::into_process_error)?;
         Ok(())
     }
+
+    fn requires_ordering(&self) -> bool {
+        self.ordered
+    }
 }
 
 #[cfg(test)]
@@ -293,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_encoder_builder_construction() {
-        let builder = BinseqWriterBuilder::new(Format::Vbq);
+        let builder = BinseqWriterBuilder::new(Format::Cbq);
         let handle = Box::new(Cursor::new(Vec::new()));
         let encoder_builder = FastxEncoderBuilder::new(builder, handle);
 
@@ -303,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_encoder_builder_input_methods() {
-        let builder = BinseqWriterBuilder::new(Format::Vbq);
+        let builder = BinseqWriterBuilder::new(Format::Cbq);
         let handle = Box::new(Cursor::new(Vec::new()));
         let encoder_builder = FastxEncoderBuilder::new(builder, handle)
             .input("test.fastq")
@@ -315,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_encoder_builder_stdin() {
-        let builder = BinseqWriterBuilder::new(Format::Vbq);
+        let builder = BinseqWriterBuilder::new(Format::Cbq);
         let handle = Box::new(Cursor::new(Vec::new()));
         let encoder_builder = FastxEncoderBuilder::new(builder, handle).input_stdin();
 
@@ -324,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_encoder_builder_single() {
-        let builder = BinseqWriterBuilder::new(Format::Vbq);
+        let builder = BinseqWriterBuilder::new(Format::Cbq);
         let handle = Box::new(Cursor::new(Vec::new()));
         let encoder_builder = FastxEncoderBuilder::new(builder, handle).input(FASTQ_R1_PATH);
 
@@ -336,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_encoder_builder_paired() {
-        let builder = BinseqWriterBuilder::new(Format::Vbq);
+        let builder = BinseqWriterBuilder::new(Format::Cbq);
         let handle = Box::new(Cursor::new(Vec::new()));
         let encoder_builder =
             FastxEncoderBuilder::new(builder, handle).input_paired(FASTQ_R1_PATH, FASTQ_R2_PATH);
